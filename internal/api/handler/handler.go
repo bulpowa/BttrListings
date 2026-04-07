@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"OlxScraper/internal/llm"
 	"OlxScraper/internal/response"
 	"OlxScraper/internal/service"
 	"OlxScraper/internal/validation"
@@ -9,10 +10,11 @@ import (
 
 type Handler struct {
 	service *service.Service
+	ollama  *llm.OllamaClient
 }
 
-func New(service *service.Service) *Handler {
-	return &Handler{service: service}
+func New(service *service.Service, ollama *llm.OllamaClient) *Handler {
+	return &Handler{service: service, ollama: ollama}
 }
 
 func (h *Handler) ValidateRequest(c echo.Context, i interface{}) *response.Response {

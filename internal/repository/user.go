@@ -38,7 +38,8 @@ func (r *userRepository) Create(ctx context.Context, user *db.User) (*int64, err
 		PasswordHash: user.PasswordHash,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		// Postgres: "duplicate key value violates unique constraint"
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return nil, ErrDuplicateUsername
 		}
 		return nil, err

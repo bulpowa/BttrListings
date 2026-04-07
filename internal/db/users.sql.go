@@ -10,8 +10,8 @@ import (
 	"database/sql"
 )
 
-const createUser = `-- name: CreateUser :execlastid
-INSERT INTO users (username, password_hash) VALUES (?, ?)
+const createUser = `-- name: CreateUser :one
+INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id
 `
 
 type CreateUserParams struct {
@@ -20,15 +20,13 @@ type CreateUserParams struct {
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, createUser, arg.Username, arg.PasswordHash)
-	if err != nil {
-		return 0, err
-	}
-	return result.LastInsertId()
+	var id int64
+	err := q.db.QueryRowContext(ctx, createUser, arg.Username, arg.PasswordHash).Scan(&id)
+	return id, err
 }
 
 const getUnverifiedUsers = `-- name: GetUnverifiedUsers :many
-SELECT id, username, password_hash, created_at, is_verified, role FROM users WHERE is_verified = 0 ORDER BY id
+SELECT id, username, password_hash, created_at, is_verified, role FROM users WHERE is_verified = false OR is_verified IS NULL ORDER BY id
 `
 
 func (q *Queries) GetUnverifiedUsers(ctx context.Context) ([]User, error) {
@@ -62,7 +60,7 @@ func (q *Queries) GetUnverifiedUsers(ctx context.Context) ([]User, error) {
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, password_hash, created_at, is_verified, role FROM users WHERE username = ? LIMIT 1
+SELECT id, username, password_hash, created_at, is_verified, role FROM users WHERE username = $1 LIMIT 1
 `
 
 func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
@@ -80,7 +78,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 }
 
 const verifyUser = `-- name: VerifyUser :one
-UPDATE users SET is_verified = ? WHERE id = ? RETURNING is_verified
+UPDATE users SET is_verified = $1 WHERE id = $2 RETURNING is_verified
 `
 
 type VerifyUserParams struct {
