@@ -1,5 +1,3 @@
--- +goose Up
--- +goose StatementBegin
 CREATE TABLE IF NOT EXISTS listings (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     url TEXT NOT NULL,
@@ -28,9 +26,3 @@ CREATE TABLE IF NOT EXISTS listings (
 
 CREATE INDEX IF NOT EXISTS listings_enrichment_status ON listings(enrichment_status);
 CREATE INDEX IF NOT EXISTS listings_deal_score ON listings(deal_score);
--- +goose StatementEnd
-
--- +goose Down
--- +goose StatementBegin
-DROP TABLE IF EXISTS listings;
--- +goose StatementEnd

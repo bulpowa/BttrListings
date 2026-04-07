@@ -147,8 +147,8 @@ func parseListings(html, baseURL string) []*model.CreateListingInput {
 		}
 		href := line[start : start+end]
 
-		// Filter for listing URLs (OLX pattern)
-		if !strings.Contains(href, "/oferta/") && !strings.Contains(href, "/item/") {
+		// Filter for listing URLs — olx.bg uses /ad/, other regions use /oferta/ or /item/
+		if !strings.Contains(href, "/oferta/") && !strings.Contains(href, "/item/") && !strings.Contains(href, "/ad/") {
 			continue
 		}
 

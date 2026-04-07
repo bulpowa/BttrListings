@@ -41,11 +41,11 @@ Set is_suspicious=true if: no photos mentioned, price is >3x or <20% of typical,
 description is <10 words, or listing appears copy-pasted.`
 
 var (
-	htmlTagRe      = regexp.MustCompile(`<[^>]+>`)
-	whitespaceRe   = regexp.MustCompile(`\s+`)
+	htmlTagRe    = regexp.MustCompile(`<[^>]+>`)
+	whitespaceRe = regexp.MustCompile(`\s+`)
 )
 
-// PreprocessText strips HTML and truncates to ~2000 tokens before sending to Ollama.
+// PreprocessText strips HTML and truncates to ~2000 tokens before sending to the LLM.
 func PreprocessText(rawHTML string) string {
 	text := html.UnescapeString(htmlTagRe.ReplaceAllString(rawHTML, " "))
 	text = whitespaceRe.ReplaceAllString(strings.TrimSpace(text), " ")
@@ -55,7 +55,7 @@ func PreprocessText(rawHTML string) string {
 	return text
 }
 
-// OllamaClient calls a local Ollama instance for structured JSON extraction.
+// OllamaClient calls an OpenAI-compatible LLM server (e.g. LM Studio) for structured JSON extraction.
 type OllamaClient struct {
 	host   string
 	model  string
@@ -66,31 +66,35 @@ func NewOllamaClient(host, model string) *OllamaClient {
 	return &OllamaClient{
 		host:  strings.TrimRight(host, "/"),
 		model: model,
-		client: &http.Client{Timeout: 35 * time.Second},
+		client: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
-type ollamaRequest struct {
-	Model   string        `json:"model"`
-	Prompt  string        `json:"prompt"`
-	System  string        `json:"system"`
-	Stream  bool          `json:"stream"`
-	Format  string        `json:"format"`
-	Options ollamaOptions `json:"options"`
+// OpenAI-compatible request/response types.
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
-type ollamaOptions struct {
-	Temperature float64 `json:"temperature"`
+type chatRequest struct {
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	Temperature float64       `json:"temperature"`
+	Stream      bool          `json:"stream"`
 }
 
-type ollamaResponse struct {
-	Response string `json:"response"`
-	Done     bool   `json:"done"`
+type chatChoice struct {
+	Message chatMessage `json:"message"`
 }
 
-// Ping checks whether Ollama is reachable. Non-fatal — callers log a WARN and continue.
+type chatResponse struct {
+	Choices []chatChoice `json:"choices"`
+}
+
+// Ping checks whether the LLM server is reachable.
 func (c *OllamaClient) Ping(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.host+"/api/tags", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.host+"/api/v1/models", nil)
 	if err != nil {
 		return err
 	}
@@ -100,19 +104,19 @@ func (c *OllamaClient) Ping(ctx context.Context) error {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		return fmt.Errorf("LLM server returned status %d", resp.StatusCode)
 	}
 	return nil
 }
 
-// IsReachable returns true if Ollama is currently reachable.
+// IsReachable returns true if the LLM server is currently reachable.
 func (c *OllamaClient) IsReachable(ctx context.Context) bool {
 	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	return c.Ping(pingCtx) == nil
 }
 
-// Extract sends preprocessed listing text to Ollama and returns structured fields.
+// Extract sends preprocessed listing text to the LLM and returns structured fields.
 // It retries once with temperature=0.1 if the first response fails JSON validation.
 func (c *OllamaClient) Extract(ctx context.Context, text string) (*ExtractionResult, error) {
 	temperatures := []float64{0, 0.1}
@@ -124,26 +128,27 @@ func (c *OllamaClient) Extract(ctx context.Context, text string) (*ExtractionRes
 		}
 		lastErr = err
 	}
-	return nil, fmt.Errorf("ollama extraction failed after retries: %w", lastErr)
+	return nil, fmt.Errorf("LLM extraction failed after retries: %w", lastErr)
 }
 
 func (c *OllamaClient) extractOnce(ctx context.Context, text string, temperature float64) (*ExtractionResult, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, 110*time.Second)
 	defer cancel()
 
-	body, err := json.Marshal(ollamaRequest{
-		Model:  c.model,
-		Prompt: text,
-		System: systemPrompt,
-		Stream: false,
-		Format: "json",
-		Options: ollamaOptions{Temperature: temperature},
+	body, err := json.Marshal(chatRequest{
+		Model: c.model,
+		Messages: []chatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: text},
+		},
+		Temperature: temperature,
+		Stream:      false,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.host+"/api/generate", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.host+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -151,21 +156,35 @@ func (c *OllamaClient) extractOnce(ctx context.Context, text string, temperature
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ollama request: %w", err)
+		return nil, fmt.Errorf("LLM request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama status %d", resp.StatusCode)
+		return nil, fmt.Errorf("LLM status %d", resp.StatusCode)
 	}
 
-	var ollamaResp ollamaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return nil, fmt.Errorf("decode ollama response: %w", err)
+	var chatResp chatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+		return nil, fmt.Errorf("decode LLM response: %w", err)
+	}
+
+	if len(chatResp.Choices) == 0 {
+		return nil, fmt.Errorf("LLM returned no choices")
+	}
+
+	content := chatResp.Choices[0].Message.Content
+
+	// Strip markdown code fences if the model wraps JSON in ```json ... ```
+	if idx := strings.Index(content, "{"); idx > 0 {
+		content = content[idx:]
+	}
+	if idx := strings.LastIndex(content, "}"); idx >= 0 && idx < len(content)-1 {
+		content = content[:idx+1]
 	}
 
 	var result ExtractionResult
-	if err := json.Unmarshal([]byte(ollamaResp.Response), &result); err != nil {
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		return nil, fmt.Errorf("parse extraction JSON: %w", err)
 	}
 

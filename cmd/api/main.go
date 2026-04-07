@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,6 +31,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
+	"riverqueue.com/riverui"
 )
 
 type Config struct {
@@ -131,8 +133,21 @@ func main() {
 		log.Println("WARN: SCRAPER_URLS not set — scraper disabled")
 	}
 
+	// Set up River UI dashboard.
+	riverUI, err := riverui.NewHandler(&riverui.HandlerOpts{
+		Endpoints: riverui.NewEndpoints(riverClient, nil),
+		Logger:    slog.Default(),
+		Prefix:    "/riverui",
+	})
+	if err != nil {
+		log.Fatalf("river ui: %v", err)
+	}
+	if err := riverUI.Start(ctx); err != nil {
+		log.Fatalf("river ui start: %v", err)
+	}
+
 	// Start Echo HTTP server.
-	e := router.New(svc, jwtService, ollamaClient)
+	e := router.New(svc, jwtService, ollamaClient, riverUI)
 
 	go func() {
 		log.Printf("starting server on :%s", cfg.Port)
