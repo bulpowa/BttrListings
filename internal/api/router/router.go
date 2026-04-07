@@ -3,6 +3,7 @@ package router
 import (
 	"OlxScraper/internal/api/handler"
 	"OlxScraper/internal/auth"
+	"OlxScraper/internal/llm"
 	"OlxScraper/internal/middleware"
 	"OlxScraper/internal/service"
 	"OlxScraper/internal/validation"
@@ -10,7 +11,7 @@ import (
 	echomw "github.com/labstack/echo/v4/middleware"
 )
 
-func New(service *service.Service, jwtService auth.JWTService) *echo.Echo {
+func New(svc *service.Service, jwtService auth.JWTService, ollamaClient *llm.OllamaClient) *echo.Echo {
 	e := echo.New()
 
 	e.Use(echomw.RemoveTrailingSlash())
@@ -22,16 +23,20 @@ func New(service *service.Service, jwtService auth.JWTService) *echo.Echo {
 
 	adminMiddleware := middleware.NewMiddleware(jwtService)
 
-	h := handler.New(service)
+	h := handler.New(svc, ollamaClient)
 
 	e.GET("/health", h.HandleHealth)
 	e.POST("/register", h.HandleRegister)
 	e.POST("/login", h.HandleLogin)
 
+	e.GET("/listings", h.GetListings)
+	e.GET("/listings/:id", h.GetListingByID)
+
 	adminGroup := e.Group("/admin")
 	adminGroup.Use(adminMiddleware.AdminGuard)
-	e.POST("/verify", h.VerifyUser)
-	e.GET("/getUnverified", h.GetUnverifiedUsers)
+	adminGroup.POST("/verify", h.VerifyUser)
+	adminGroup.GET("/getUnverified", h.GetUnverifiedUsers)
+	adminGroup.POST("/listings/:id/re-enrich", h.ReEnrichListing)
 
 	return e
 }

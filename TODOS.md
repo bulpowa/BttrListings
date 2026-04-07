@@ -2,13 +2,6 @@
 
 ## P1
 
-### Fix admin route registration bug
-**What:** `internal/api/router/router.go:27-28` — `VerifyUser` and `GetUnverifiedUsers` are registered on
-the root `e`, not on `adminGroup`. They're not protected by `AdminGuard`. Any user can call them.
-**Why:** Security bug. Any authenticated user (not just admins) can verify/unverify other users.
-**Fix:** Move to `adminGroup.POST("/verify", ...)` and `adminGroup.GET("/getUnverified", ...)`
-**Effort:** XS | **Priority:** P1 | **Depends on:** nothing
-
 ### Write enrichment worker tests
 **What:** Unit test for `EnrichListingWorker.Work()` with mocked Ollama. Test: happy path, invalid JSON retry,
 listing not found (nil return), partial schema validation.
@@ -48,3 +41,9 @@ but with a different price, insert a row into `listing_price_history` instead of
 Use the same local Ollama instance to parse the query into filter params, then hit the structured search endpoint.
 **Why:** The 10x version of search. Makes the whole system feel magical.
 **Effort:** L | **Priority:** P3 | **Depends on:** structured listing search
+
+## Completed
+
+### Fix admin route registration bug
+**What:** `VerifyUser` and `GetUnverifiedUsers` moved onto `adminGroup` behind `AdminGuard`.
+**Completed:** v0.1.0.0 (2026-04-07)
