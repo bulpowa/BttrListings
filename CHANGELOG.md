@@ -2,6 +2,13 @@
 
 All notable changes to BttrListings are documented here.
 
+## [0.2.0.0] - 2026-04-07
+
+### Added
+- Deal alerts: after enrichment, if `deal_score >= 8`, POST to `ALERT_WEBHOOK_URL` webhook in ntfy.sh-compatible format (Title, Priority, Tags headers)
+- `ALERT_WEBHOOK_URL` env var — no-op when empty, fire-and-forget goroutine so enrichment job is never blocked by alert failure
+- `internal/alert` package with `Notifier` struct and 4 unit tests covering happy path, no-URL no-op, webhook error resilience, and missing currency edge case
+
 ## [0.1.0.0] - 2026-04-07
 
 ### Added

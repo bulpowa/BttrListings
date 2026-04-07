@@ -29,6 +29,7 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:27b}
       PORT: 8080
       SCRAPER_URLS: ${SCRAPER_URLS:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
 
 volumes:
   postgres_data:

@@ -20,13 +20,6 @@ index on these columns (`CREATE INDEX listings_condition_score ON listings(condi
 implementing to avoid full table scans.
 **Effort:** M (human: ~1 day / CC: ~15min) | **Priority:** P2 | **Depends on:** enrichment pipeline
 
-### Deal alerts
-**What:** After enrichment, if `deal_score >= 8`, POST to a configurable webhook URL (`ALERT_WEBHOOK_URL` env var).
-Support ntfy.sh format out of the box (simple POST with text body). Telegram and generic webhooks as fallback.
-**Why:** The payoff for all the deal scoring work. Passive deal-finder.
-**Context:** One HTTP call in `EnrichListingWorker.Work()` after the UPDATE succeeds. Fire-and-forget —
-don't let a failed webhook retry block the enrichment job.
-**Effort:** S (human: ~1h / CC: ~5min) | **Priority:** P2 | **Depends on:** enrichment pipeline
 
 ## P3
 
@@ -43,6 +36,12 @@ Use the same local Ollama instance to parse the query into filter params, then h
 **Effort:** L | **Priority:** P3 | **Depends on:** structured listing search
 
 ## Completed
+
+### Deal alerts
+**What:** After enrichment, if `deal_score >= 8`, POST to `ALERT_WEBHOOK_URL` env var. ntfy.sh compatible
+(Title/Priority/Tags headers). Fire-and-forget goroutine — never blocks the enrichment job. No-op when
+`ALERT_WEBHOOK_URL` is empty. 4 tests in `internal/alert/alert_test.go`.
+**Completed:** v0.2.0.0 (2026-04-07)
 
 ### Fix admin route registration bug
 **What:** `VerifyUser` and `GetUnverifiedUsers` moved onto `adminGroup` behind `AdminGuard`.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"OlxScraper/internal/alert"
 	"OlxScraper/internal/llm"
 	"OlxScraper/internal/repository"
 
@@ -20,12 +21,13 @@ func (EnrichListingArgs) Kind() string { return "enrich_listing" }
 // EnrichListingWorker loads a raw listing, calls Ollama, and writes enriched fields back.
 type EnrichListingWorker struct {
 	river.WorkerDefaults[EnrichListingArgs]
-	repo   *repository.Repository
-	ollama *llm.OllamaClient
+	repo     *repository.Repository
+	ollama   *llm.OllamaClient
+	notifier *alert.Notifier
 }
 
-func NewEnrichListingWorker(repo *repository.Repository, ollama *llm.OllamaClient) *EnrichListingWorker {
-	return &EnrichListingWorker{repo: repo, ollama: ollama}
+func NewEnrichListingWorker(repo *repository.Repository, ollama *llm.OllamaClient, notifier *alert.Notifier) *EnrichListingWorker {
+	return &EnrichListingWorker{repo: repo, ollama: ollama, notifier: notifier}
 }
 
 func (w *EnrichListingWorker) Work(ctx context.Context, job *river.Job[EnrichListingArgs]) error {
@@ -66,6 +68,12 @@ func (w *EnrichListingWorker) Work(ctx context.Context, job *river.Job[EnrichLis
 
 	if err := w.repo.Listing.UpdateEnrichment(ctx, listing.ID, result); err != nil {
 		return fmt.Errorf("update enrichment listing %d: %w", job.Args.ListingID, err)
+	}
+
+	// Fire deal alert if score is high enough. Fire-and-forget — never blocks the job.
+	if result.DealScore >= 8 {
+		w.notifier.Send(listing.ID, listing.Title, result.DealScore,
+			result.PriceAmount, result.PriceCurrency, listing.URL)
 	}
 
 	return nil
