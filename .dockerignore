@@ -1,0 +1,9 @@
+.git
+.gstack
+.env
+*.env
+*.md
+!go.mod
+!go.sum
+.gitignore
+.dockerignore
