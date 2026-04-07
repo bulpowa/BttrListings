@@ -1,14 +1,5 @@
 # TODOS
 
-## P1
-
-### Write enrichment worker tests
-**What:** Unit test for `EnrichListingWorker.Work()` with mocked Ollama. Test: happy path, invalid JSON retry,
-listing not found (nil return), partial schema validation.
-Also: dedup integration test (two INSERTs with same url_hash → 1 row), admin guard on re-enrich endpoint.
-**Why:** Enrichment worker has 3+ failure modes. Zero tests means any of these will silently fail in production.
-**Effort:** M (human: ~1 day / CC: ~20min) | **Priority:** P1 | **Depends on:** enrichment pipeline implementation
-
 ## P2
 
 ### Structured listing search
@@ -41,6 +32,12 @@ Use the same local Ollama instance to parse the query into filter params, then h
 **What:** After enrichment, if `deal_score >= 8`, POST to `ALERT_WEBHOOK_URL` env var. ntfy.sh compatible
 (Title/Priority/Tags headers). Fire-and-forget goroutine — never blocks the enrichment job. No-op when
 `ALERT_WEBHOOK_URL` is empty. 4 tests in `internal/alert/alert_test.go`.
+**Completed:** v0.2.0.0 (2026-04-07)
+
+### Write enrichment worker tests
+**What:** 7 unit tests for `EnrichListingWorker.Work()` (happy path, not found, already enriched, LLM error,
+invalid JSON retry, DB error, fallback to title). 9 handler tests covering listings endpoints and admin guard
+(no token → 401, user token → 403, admin token → 202, not found → 404, service error → 500).
 **Completed:** v0.2.0.0 (2026-04-07)
 
 ### Fix admin route registration bug
