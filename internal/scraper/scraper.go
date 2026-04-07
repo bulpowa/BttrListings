@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
+	"golang.org/x/net/html"
 )
 
 // Scraper fetches OLX search pages periodically and inserts new listings into Postgres,
@@ -85,7 +86,7 @@ func (s *Scraper) scrapePage(ctx context.Context, searchURL string) error {
 		return fmt.Errorf("read body: %w", err)
 	}
 
-	listings := parseListings(string(body), searchURL)
+	listings := ParseListings(string(body), searchURL)
 	log.Printf("scraper: found %d listings on %s", len(listings), searchURL)
 
 	for _, l := range listings {
@@ -115,69 +116,137 @@ func (s *Scraper) insertListing(ctx context.Context, input *model.CreateListingI
 	})
 }
 
-// parseListings parses listing cards from an OLX search results page.
-// Adapt the selectors for your OLX region — the structure varies by country.
-func parseListings(html, baseURL string) []*model.CreateListingInput {
+// isListingHref reports whether an href is an OLX listing URL.
+// Covers olx.bg (/d/ad/), olx.pl (/oferta/), and other OLX regions (/item/, /ad/).
+func isListingHref(href string) bool {
+	return strings.Contains(href, "/d/ad/") ||
+		strings.Contains(href, "/oferta/") ||
+		strings.Contains(href, "/item/") ||
+		(strings.Contains(href, "/ad/") && !strings.Contains(href, "/d/ad/"))
+}
+
+// ParseListings parses listing cards from an OLX search results page using a
+// proper HTML parser. It walks every <a> element and collects those whose href
+// matches known OLX listing URL patterns. Exported so cmd/scrape-check can use
+// it without a database.
+func ParseListings(rawHTML, baseURL string) []*model.CreateListingInput {
 	var listings []*model.CreateListingInput
-
-	// TODO: adapt these selectors for your OLX region.
-	// The example below looks for anchor tags whose href contains "/oferta/" or "/item/",
-	// which is the common OLX listing URL pattern.
-	//
-	// For production use, replace this with a proper HTML parser
-	// (e.g. golang.org/x/net/html) and target the exact card structure.
-
-	lines := strings.Split(html, "\n")
 	seen := map[string]bool{}
+	baseHost := extractHost(baseURL)
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if !strings.Contains(line, `href="`) {
-			continue
-		}
-		// Extract href value
-		start := strings.Index(line, `href="`)
-		if start == -1 {
-			continue
-		}
-		start += 6
-		end := strings.Index(line[start:], `"`)
-		if end == -1 {
-			continue
-		}
-		href := line[start : start+end]
-
-		// Filter for listing URLs — olx.bg uses /ad/, other regions use /oferta/ or /item/
-		if !strings.Contains(href, "/oferta/") && !strings.Contains(href, "/item/") && !strings.Contains(href, "/ad/") {
-			continue
-		}
-
-		// Normalise and deduplicate
-		listingURL := href
-		if strings.HasPrefix(href, "/") {
-			// Relative URL — prepend base
-			baseHost := extractHost(baseURL)
-			listingURL = baseHost + href
-		}
-
-		hash := hashURL(listingURL)
-		if seen[hash] {
-			continue
-		}
-		seen[hash] = true
-
-		rawHTML := line // Store the raw line as minimal raw_html
-		title := extractTitle(line)
-
-		listings = append(listings, &model.CreateListingInput{
-			URL:     listingURL,
-			URLHash: hash,
-			Title:   title,
-			RawHTML: &rawHTML,
-		})
+	doc, err := html.Parse(strings.NewReader(rawHTML))
+	if err != nil {
+		log.Printf("scraper: html parse error: %v", err)
+		return nil
 	}
 
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "a" {
+			href := attrVal(n, "href")
+			if href == "" || !isListingHref(href) {
+				// still recurse into children
+				for c := n.FirstChild; c != nil; c = c.NextSibling {
+					walk(c)
+				}
+				return
+			}
+
+			// Resolve relative URLs
+			listingURL := href
+			if strings.HasPrefix(href, "/") {
+				listingURL = baseHost + href
+			}
+
+			// Strip query string for dedup/normalisation
+			hash := hashURL(listingURL)
+			if seen[hash] {
+				for c := n.FirstChild; c != nil; c = c.NextSibling {
+					walk(c)
+				}
+				return
+			}
+			seen[hash] = true
+
+			// Clean URL (no query params)
+			cleanURL := listingURL
+			if idx := strings.Index(cleanURL, "?"); idx != -1 {
+				cleanURL = cleanURL[:idx]
+			}
+
+			title := textContent(n)
+			if title == "" {
+				title = "Untitled"
+			}
+
+			cardHTML := renderNode(n)
+			listings = append(listings, &model.CreateListingInput{
+				URL:     cleanURL,
+				URLHash: hash,
+				Title:   title,
+				RawHTML: &cardHTML,
+			})
+			return // don't recurse into children of a listing anchor
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+
 	return listings
+}
+
+// attrVal returns the value of the named attribute on an HTML element node.
+func attrVal(n *html.Node, name string) string {
+	for _, a := range n.Attr {
+		if a.Key == name {
+			return a.Val
+		}
+	}
+	return ""
+}
+
+// textContent returns the best title text from an anchor node.
+// OLX cards use two anchors per listing: an image anchor (with <img alt="title">)
+// and a text anchor (with <h4>title</h4>). We collect visible text nodes and
+// fall back to <img alt> so whichever anchor we encounter first yields a title.
+func textContent(n *html.Node) string {
+	var b strings.Builder
+	var imgAlt string
+
+	var collect func(*html.Node)
+	collect = func(node *html.Node) {
+		if node.Type == html.ElementNode {
+			switch node.Data {
+			case "style", "script":
+				return // skip CSS/JS subtrees
+			case "img":
+				if imgAlt == "" {
+					imgAlt = attrVal(node, "alt")
+				}
+			}
+		}
+		if node.Type == html.TextNode {
+			b.WriteString(node.Data)
+		}
+		for c := node.FirstChild; c != nil; c = c.NextSibling {
+			collect(c)
+		}
+	}
+	collect(n)
+
+	if t := strings.TrimSpace(b.String()); t != "" {
+		return t
+	}
+	return strings.TrimSpace(imgAlt)
+}
+
+// renderNode renders an HTML node back to a string for storage as raw_html.
+func renderNode(n *html.Node) string {
+	var b strings.Builder
+	_ = html.Render(&b, n)
+	return b.String()
 }
 
 func hashURL(rawURL string) string {
@@ -206,16 +275,3 @@ func extractHost(rawURL string) string {
 	return ""
 }
 
-func extractTitle(line string) string {
-	// Very naive: grab text between > and <
-	start := strings.LastIndex(line, ">")
-	end := strings.Index(line[start:], "<")
-	if start == -1 || end == -1 {
-		return "Untitled"
-	}
-	title := strings.TrimSpace(line[start+1 : start+end])
-	if title == "" {
-		return "Untitled"
-	}
-	return title
-}

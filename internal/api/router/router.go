@@ -32,6 +32,8 @@ func New(svc *service.Service, jwtService auth.JWTService, ollamaClient *llm.Oll
 
 	h := handler.New(svc, ollamaClient)
 
+	e.GET("/", h.HandleUI)
+	e.GET("/ui", h.HandleUI)
 	e.GET("/health", h.HandleHealth)
 	e.POST("/register", h.HandleRegister)
 	e.POST("/login", h.HandleLogin)
