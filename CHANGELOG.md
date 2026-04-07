@@ -2,6 +2,12 @@
 
 All notable changes to BttrListings are documented here.
 
+## [0.1.0.1] - 2026-04-07
+
+### Added
+- Unit tests for `EnrichListingWorker.Work()`: 7 cases covering happy path, listing not found, already enriched, LLM error, invalid JSON retry (verifies 2-attempt behaviour), DB error, and fallback from `raw_html` to title+description+price
+- Handler tests for listing endpoints and admin guard regression: 9 cases covering `GET /listings`, `GET /listings/:id` (OK, invalid ID, not found), and `POST /admin/listings/:id/re-enrich` (no token → 401, user token → 403, admin token → 202/404/500)
+
 ## [0.1.0.0] - 2026-04-07
 
 ### Added
