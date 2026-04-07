@@ -44,6 +44,12 @@ Use the same local Ollama instance to parse the query into filter params, then h
 
 ## Completed
 
+### Write enrichment worker tests
+**What:** 7 unit tests for `EnrichListingWorker.Work()` (happy path, not found, already enriched, LLM error,
+invalid JSON retry, DB error, fallback to title). 9 handler tests covering listings endpoints and admin guard
+(no token → 401, user token → 403, admin token → 202, not found → 404, service error → 500).
+**Completed:** v0.1.0.0 (2026-04-07)
+
 ### Fix admin route registration bug
 **What:** `VerifyUser` and `GetUnverifiedUsers` moved onto `adminGroup` behind `AdminGuard`.
 **Completed:** v0.1.0.0 (2026-04-07)
