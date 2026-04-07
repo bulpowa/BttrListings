@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"OlxScraper/internal/alert"
 	"OlxScraper/internal/api/router"
 	"OlxScraper/internal/auth"
 	sqlcDb "OlxScraper/internal/db"
@@ -35,12 +36,13 @@ import (
 )
 
 type Config struct {
-	DatabaseURL string `env:"DATABASE_URL,required"`
-	JWTSecret   string `env:"JWT_SECRET,required"`
-	OllamaHost  string `env:"OLLAMA_HOST,required"`
-	OllamaModel string `env:"OLLAMA_MODEL" envDefault:"gemma4:27b"`
-	Port        string `env:"PORT" envDefault:"8080"`
-	ScraperURLs string `env:"SCRAPER_URLS" envDefault:""`
+	DatabaseURL      string `env:"DATABASE_URL,required"`
+	JWTSecret        string `env:"JWT_SECRET,required"`
+	OllamaHost       string `env:"OLLAMA_HOST,required"`
+	OllamaModel      string `env:"OLLAMA_MODEL" envDefault:"gemma4:27b"`
+	Port             string `env:"PORT" envDefault:"8080"`
+	ScraperURLs      string `env:"SCRAPER_URLS" envDefault:""`
+	AlertWebhookURL  string `env:"ALERT_WEBHOOK_URL" envDefault:""`
 }
 
 func main() {
@@ -97,8 +99,9 @@ func main() {
 	jwtService := auth.NewJWTService(cfg.JWTSecret)
 
 	// Set up River workers.
+	notifier := alert.New(cfg.AlertWebhookURL)
 	workers := river.NewWorkers()
-	river.AddWorker(workers, worker.NewEnrichListingWorker(repo, ollamaClient))
+	river.AddWorker(workers, worker.NewEnrichListingWorker(repo, ollamaClient, notifier))
 
 	riverClient, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Queues: map[string]river.QueueConfig{

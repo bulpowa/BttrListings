@@ -2,9 +2,12 @@
 
 All notable changes to BttrListings are documented here.
 
-## [0.1.0.1] - 2026-04-07
+## [0.2.0.0] - 2026-04-07
 
 ### Added
+- Deal alerts: after enrichment, if `deal_score >= 8`, POST to `ALERT_WEBHOOK_URL` webhook in ntfy.sh-compatible format (Title, Priority, Tags headers)
+- `ALERT_WEBHOOK_URL` env var — no-op when empty, fire-and-forget goroutine so enrichment job is never blocked by alert failure
+- `internal/alert` package with `Notifier` struct and 4 unit tests covering happy path, no-URL no-op, webhook error resilience, and missing currency edge case
 - Unit tests for `EnrichListingWorker.Work()`: 7 cases covering happy path, listing not found, already enriched, LLM error, invalid JSON retry (verifies 2-attempt behaviour), DB error, and fallback from `raw_html` to title+description+price
 - Handler tests for listing endpoints and admin guard regression: 9 cases covering `GET /listings`, `GET /listings/:id` (OK, invalid ID, not found), and `POST /admin/listings/:id/re-enrich` (no token → 401, user token → 403, admin token → 202/404/500)
 
