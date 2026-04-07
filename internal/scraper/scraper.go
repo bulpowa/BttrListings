@@ -86,7 +86,7 @@ func (s *Scraper) scrapePage(ctx context.Context, searchURL string) error {
 		return fmt.Errorf("read body: %w", err)
 	}
 
-	listings := parseListings(string(body), searchURL)
+	listings := ParseListings(string(body), searchURL)
 	log.Printf("scraper: found %d listings on %s", len(listings), searchURL)
 
 	for _, l := range listings {
@@ -125,10 +125,11 @@ func isListingHref(href string) bool {
 		(strings.Contains(href, "/ad/") && !strings.Contains(href, "/d/ad/"))
 }
 
-// parseListings parses listing cards from an OLX search results page using a
+// ParseListings parses listing cards from an OLX search results page using a
 // proper HTML parser. It walks every <a> element and collects those whose href
-// matches known OLX listing URL patterns.
-func parseListings(rawHTML, baseURL string) []*model.CreateListingInput {
+// matches known OLX listing URL patterns. Exported so cmd/scrape-check can use
+// it without a database.
+func ParseListings(rawHTML, baseURL string) []*model.CreateListingInput {
 	var listings []*model.CreateListingInput
 	seen := map[string]bool{}
 	baseHost := extractHost(baseURL)
