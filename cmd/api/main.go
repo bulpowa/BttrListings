@@ -38,7 +38,7 @@ import (
 type Config struct {
 	DatabaseURL      string `env:"DATABASE_URL,required"`
 	JWTSecret        string `env:"JWT_SECRET,required"`
-	OllamaHost       string `env:"OLLAMA_HOST,required"`
+	OllamaHost       string `env:"OLLAMA_HOST" envDefault:"http://localhost:11434"`
 	OllamaModel      string `env:"OLLAMA_MODEL" envDefault:"gemma4:27b"`
 	Port             string `env:"PORT" envDefault:"8080"`
 	ScraperURLs      string `env:"SCRAPER_URLS" envDefault:""`
