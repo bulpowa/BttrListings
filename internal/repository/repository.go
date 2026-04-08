@@ -7,17 +7,19 @@ import (
 )
 
 type Repository struct {
-	queries *db.Queries
-	pool    *pgxpool.Pool
-	User    UserRepository
-	Listing ListingRepository
+	queries        *db.Queries
+	pool           *pgxpool.Pool
+	User           UserRepository
+	Listing        ListingRepository
+	ComponentPrice ComponentPriceRepository
 }
 
 func New(queries *db.Queries, pool *pgxpool.Pool) *Repository {
 	return &Repository{
-		queries: queries,
-		pool:    pool,
-		User:    NewUserRepository(queries),
-		Listing: NewListingRepository(pool),
+		queries:        queries,
+		pool:           pool,
+		User:           NewUserRepository(queries),
+		Listing:        NewListingRepository(pool),
+		ComponentPrice: NewComponentPriceRepository(pool),
 	}
 }
