@@ -31,10 +31,6 @@ Schema:
   "category": "string",
   "location_city": "string",
   "specs": {"key": "value"},
-  "deal_score": 1-10,
-  "deal_reasoning": "string",
-  "is_suspicious": true|false,
-  "suspicious_reason": "string or null",
   "components": ["canonical model name", ...]
 }
 
@@ -72,20 +68,6 @@ components: Canonical model names for market price lookup.
   - Full PC: list CPU and GPU separately — ["i7-12700K", "RTX 3070"].
   - Output [] for listings with no market-priceable components (furniture, cars, clothing).
 
-deal_score (1-10):
-  - 9-10: Excellent condition, priced 20%+ below typical market for this item
-  - 7-8: Good condition, fair or slightly below market
-  - 5-6: Average condition and price
-  - 3-4: Poor condition or noticeably overpriced
-  - 1-2: Very poor condition, extreme price, or suspicious
-
-is_suspicious / suspicious_reason:
-  Set is_suspicious=true and explain in suspicious_reason if ANY of:
-  - Price is under 20% or over 3x typical market value for this item
-  - Description is fewer than 10 words
-  - Listing appears copy-pasted or templated (no personal details)
-  - Urgent language with unusually low price ("бързо", "спешно" + suspiciously cheap)
-
 EXAMPLES:
 
 Input: "RTX 3080 10GB Founders Edition. Купена от Technomarket преди 1 година, работи перфектно. 850 лв. гр. София"
@@ -98,10 +80,6 @@ Output:
   "category": "GPU",
   "location_city": "Sofia",
   "specs": {"variant": "Founders Edition"},
-  "deal_score": 7,
-  "deal_reasoning": "Good condition card, price is reasonable for the market",
-  "is_suspicious": false,
-  "suspicious_reason": null,
   "components": ["RTX 3080"]
 }
 
@@ -115,10 +93,6 @@ Output:
   "category": "PC",
   "location_city": "",
   "specs": {"ram": "32GB DDR4 3200MHz", "storage": "1TB Samsung 980 NVMe", "psu": "750W Seasonic Gold", "case": "be quiet! Pure Base 500", "gpu_variant": "MSI Gaming X"},
-  "deal_score": 6,
-  "deal_reasoning": "Complete build at average market price, no peripherals included",
-  "is_suspicious": false,
-  "suspicious_reason": null,
   "components": ["i7-12700K", "RTX 3070"]
 }
 
@@ -132,10 +106,6 @@ Output:
   "category": "Phone",
   "location_city": "",
   "specs": {},
-  "deal_score": 2,
-  "deal_reasoning": "Price is far below typical market value for this model",
-  "is_suspicious": true,
-  "suspicious_reason": "Price of 150 BGN is under 20% of typical market value for iPhone 14 Pro 128GB; urgent language",
   "components": ["iPhone 14 Pro 128GB"]
 }`
 

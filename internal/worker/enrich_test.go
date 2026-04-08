@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -25,15 +26,15 @@ type mockListingRepo struct {
 	repository.ListingRepository // nil embed — panics on non-overridden methods
 
 	fnGetByID          func(ctx context.Context, id int64) (*model.ListingRow, error)
-	fnUpdateEnrichment func(ctx context.Context, id int64, result *llm.ExtractionResult, marketScore *float64) error
+	fnUpdateEnrichment func(ctx context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error
 }
 
 func (m *mockListingRepo) GetByID(ctx context.Context, id int64) (*model.ListingRow, error) {
 	return m.fnGetByID(ctx, id)
 }
 
-func (m *mockListingRepo) UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, marketScore *float64) error {
-	return m.fnUpdateEnrichment(ctx, id, result, marketScore)
+func (m *mockListingRepo) UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
+	return m.fnUpdateEnrichment(ctx, id, result, scores)
 }
 
 // mockComponentPriceRepo is a test double for ComponentPriceRepository.
@@ -99,10 +100,6 @@ const validExtraction = `{
   "category": "GPU",
   "location_city": "Sofia",
   "specs": {"vram": "10GB"},
-  "deal_score": 8,
-  "deal_reasoning": "Below market price, good condition",
-  "is_suspicious": false,
-  "suspicious_reason": null,
   "components": []
 }`
 
@@ -117,10 +114,6 @@ func extractionWithComponents(components []string, price float64) string {
   "category": "PC",
   "location_city": "Sofia",
   "specs": {},
-  "deal_score": 6,
-  "deal_reasoning": "Fair price",
-  "is_suspicious": false,
-  "suspicious_reason": null,
   "components": ` + string(compsJSON) + `
 }`
 }
@@ -140,14 +133,16 @@ func TestEnrichWorker_HappyPath(t *testing.T) {
 
 	var savedID int64
 	var savedResult *llm.ExtractionResult
+	var savedScores model.EnrichedScores
 
 	mock := &mockListingRepo{
 		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
 			return listing, nil
 		},
-		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, _ *float64) error {
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
 			savedID = id
 			savedResult = result
+			savedScores = scores
 			return nil
 		},
 	}
@@ -165,8 +160,10 @@ func TestEnrichWorker_HappyPath(t *testing.T) {
 	require.NotNil(t, savedResult)
 	assert.Equal(t, "NVIDIA RTX 3080", savedResult.TitleNormalized)
 	assert.Equal(t, 450.0, savedResult.PriceAmount)
-	assert.Equal(t, 8, savedResult.DealScore)
-	assert.False(t, savedResult.IsSuspicious)
+	// No market data for this listing (empty components) — score is condition-based.
+	assert.Equal(t, 5, savedScores.DealScore)
+	assert.False(t, savedScores.IsSuspicious)
+	assert.Nil(t, savedScores.MarketScore)
 }
 
 func TestEnrichWorker_ListingNotFound(t *testing.T) {
@@ -216,7 +213,7 @@ func TestEnrichWorker_LLMError_Retried(t *testing.T) {
 		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
 			return listing, nil
 		},
-		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, _ *float64) error {
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, _ model.EnrichedScores) error {
 			t.Fatal("UpdateEnrichment should not be called when LLM fails")
 			return nil
 		},
@@ -240,7 +237,7 @@ func TestEnrichWorker_LLMInvalidJSON_Retried(t *testing.T) {
 		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
 			return listing, nil
 		},
-		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, _ *float64) error {
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, _ model.EnrichedScores) error {
 			t.Fatal("UpdateEnrichment should not be called when LLM returns invalid JSON")
 			return nil
 		},
@@ -290,14 +287,13 @@ func TestEnrichWorker_FallbackToTitleWhenNoRawHTML(t *testing.T) {
 		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
 			return listing, nil
 		},
-		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, _ *float64) error {
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, _ model.EnrichedScores) error {
 			return nil
 		},
 	}
 
 	w, srv := newTestWorker(mock, func(rw http.ResponseWriter, r *http.Request) {
-		capturedBody = make([]byte, r.ContentLength)
-		r.Body.Read(capturedBody)
+		capturedBody, _ = io.ReadAll(r.Body)
 		rw.Header().Set("Content-Type", "application/json")
 		rw.Write(ollamaResponse(validExtraction))
 	})
@@ -319,14 +315,14 @@ func TestEnrichWorker_MarketScoreComputed(t *testing.T) {
 	raw := "RTX 4060 gaming PC"
 	listing := &model.ListingRow{ID: 20, Title: "PC with RTX 4060", RawHTML: &raw}
 
-	var savedMarketScore *float64
+	var savedScores model.EnrichedScores
 
 	listingMock := &mockListingRepo{
 		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
 			return listing, nil
 		},
-		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, ms *float64) error {
-			savedMarketScore = ms
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
+			savedScores = scores
 			return nil
 		},
 	}
@@ -348,9 +344,12 @@ func TestEnrichWorker_MarketScoreComputed(t *testing.T) {
 
 	err := w.Work(context.Background(), newJob(20))
 	require.NoError(t, err)
-	require.NotNil(t, savedMarketScore, "market_score should be set when component price is found")
+	require.NotNil(t, savedScores.MarketScore, "market_score should be set when component price is found")
 	// 800 / 1200 ≈ 0.667
-	assert.InDelta(t, 0.667, *savedMarketScore, 0.001)
+	assert.InDelta(t, 0.667, *savedScores.MarketScore, 0.001)
+	// ratio 0.667 falls in the 0.60-0.70 bucket → DealScore 8, good condition → no modifier
+	assert.Equal(t, 8, savedScores.DealScore)
+	assert.False(t, savedScores.IsSuspicious)
 }
 
 func TestEnrichWorker_UnknownComponentQueuesJob(t *testing.T) {
@@ -365,8 +364,8 @@ func TestEnrichWorker_UnknownComponentQueuesJob(t *testing.T) {
 		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
 			return listing, nil
 		},
-		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, ms *float64) error {
-			assert.Nil(t, ms, "market_score should be nil when component not in DB")
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
+			assert.Nil(t, scores.MarketScore, "market_score should be nil when component not in DB")
 			return nil
 		},
 	}
@@ -402,8 +401,8 @@ func TestEnrichWorker_NoComponentsNoMarketScore(t *testing.T) {
 		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
 			return listing, nil
 		},
-		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, ms *float64) error {
-			assert.Nil(t, ms, "market_score should be nil for listings with no components")
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
+			assert.Nil(t, scores.MarketScore, "market_score should be nil for listings with no components")
 			return nil
 		},
 	}

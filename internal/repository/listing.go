@@ -18,7 +18,7 @@ type ListingRepository interface {
 	Insert(ctx context.Context, input *model.CreateListingInput) (int64, error)
 	GetByID(ctx context.Context, id int64) (*model.ListingRow, error)
 	GetAll(ctx context.Context, limit, offset int) ([]*model.ListingRow, error)
-	UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, marketScore *float64) error
+	UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error
 }
 
 type listingRepository struct {
@@ -88,12 +88,12 @@ func (r *listingRepository) GetAll(ctx context.Context, limit, offset int) ([]*m
 	return listings, nil
 }
 
-func (r *listingRepository) UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, marketScore *float64) error {
+func (r *listingRepository) UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
 	specsJSON, err := json.Marshal(result.Specs)
 	if err != nil {
 		specsJSON = []byte("{}")
 	}
-	dealScore := int32(result.DealScore)
+	dealScore := int32(scores.DealScore)
 	priceAmount := result.PriceAmount
 	return r.q.UpdateListingEnrichment(ctx, sqlcDb.UpdateListingEnrichmentParams{
 		ID:               id,
@@ -105,10 +105,10 @@ func (r *listingRepository) UpdateEnrichment(ctx context.Context, id int64, resu
 		LocationCity:     &result.LocationCity,
 		Specs:            specsJSON,
 		DealScore:        &dealScore,
-		DealReasoning:    &result.DealReasoning,
-		IsSuspicious:     &result.IsSuspicious,
-		SuspiciousReason: result.SuspiciousReason,
-		MarketScore:      marketScore,
+		DealReasoning:    &scores.DealReasoning,
+		IsSuspicious:     &scores.IsSuspicious,
+		SuspiciousReason: scores.SuspiciousReason,
+		MarketScore:      scores.MarketScore,
 	})
 }
 

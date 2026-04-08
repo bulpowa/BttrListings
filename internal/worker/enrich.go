@@ -8,6 +8,7 @@ import (
 
 	"OlxScraper/internal/alert"
 	"OlxScraper/internal/llm"
+	"OlxScraper/internal/model"
 	"OlxScraper/internal/repository"
 
 	"github.com/riverqueue/river"
@@ -20,8 +21,8 @@ type EnrichListingArgs struct {
 
 func (EnrichListingArgs) Kind() string { return "enrich_listing" }
 
-// EnrichListingWorker loads a raw listing, calls Ollama, computes market_score,
-// and writes enriched fields back.
+// EnrichListingWorker loads a raw listing, calls the LLM for fact extraction,
+// computes market-based scores in Go, and writes enriched fields back.
 type EnrichListingWorker struct {
 	river.WorkerDefaults[EnrichListingArgs]
 	repo               *repository.Repository
@@ -69,23 +70,117 @@ func (w *EnrichListingWorker) Work(ctx context.Context, job *river.Job[EnrichLis
 
 	text := llm.PreprocessText(rawText)
 
+	// LLM extracts only concrete facts — no scoring, no market guesses.
 	result, err := w.ollama.Extract(ctx, text)
 	if err != nil {
 		return fmt.Errorf("ollama extract listing %d: %w", job.Args.ListingID, err)
 	}
 
+	// All scoring is computed in Go from real market data.
 	marketScore := w.computeMarketScore(ctx, result)
+	scores := scoreListing(result, marketScore)
 
-	if err := w.repo.Listing.UpdateEnrichment(ctx, listing.ID, result, marketScore); err != nil {
+	if err := w.repo.Listing.UpdateEnrichment(ctx, listing.ID, result, scores); err != nil {
 		return fmt.Errorf("update enrichment listing %d: %w", job.Args.ListingID, err)
 	}
 
-	if isDeal(result.DealScore, marketScore) {
-		w.notifier.Send(listing.ID, listing.Title, result.DealScore,
+	if scores.DealScore >= 8 {
+		w.notifier.Send(listing.ID, listing.Title, scores.DealScore,
 			result.PriceAmount, result.PriceCurrency, listing.URL)
 	}
 
 	return nil
+}
+
+// scoreListing computes deal_score, deal_reasoning, is_suspicious, and suspicious_reason
+// from real market data. No LLM involvement — deterministic, auditable.
+func scoreListing(result *llm.ExtractionResult, marketScore *float64) model.EnrichedScores {
+	scores := model.EnrichedScores{MarketScore: marketScore}
+
+	if marketScore != nil && *marketScore > 0 {
+		ratio := *marketScore // ask / sum(component market prices)
+
+		// Base score from price ratio.
+		switch {
+		case ratio <= 0.50:
+			scores.DealScore = 10
+		case ratio <= 0.60:
+			scores.DealScore = 9
+		case ratio <= 0.70:
+			scores.DealScore = 8
+		case ratio <= 0.80:
+			scores.DealScore = 7
+		case ratio <= 0.90:
+			scores.DealScore = 6
+		case ratio <= 1.05:
+			scores.DealScore = 5
+		case ratio <= 1.20:
+			scores.DealScore = 4
+		case ratio <= 1.50:
+			scores.DealScore = 3
+		case ratio <= 2.00:
+			scores.DealScore = 2
+		default:
+			scores.DealScore = 1
+		}
+
+		// Condition modifier.
+		switch result.Condition {
+		case "new", "open_box":
+			scores.DealScore = min(10, scores.DealScore+1)
+		case "fair":
+			scores.DealScore = max(1, scores.DealScore-1)
+		case "poor":
+			scores.DealScore = max(1, scores.DealScore-2)
+		case "damaged":
+			scores.DealScore = max(1, scores.DealScore-3)
+		}
+
+		// Reasoning.
+		pct := int((1 - ratio) * 100)
+		if pct > 0 {
+			scores.DealReasoning = fmt.Sprintf(
+				"Asking price is %d%% below market value for these components (%s condition)", pct, result.Condition)
+		} else if pct < 0 {
+			scores.DealReasoning = fmt.Sprintf(
+				"Asking price is %d%% above market value for these components (%s condition)", -pct, result.Condition)
+		} else {
+			scores.DealReasoning = fmt.Sprintf(
+				"Asking price matches market value for these components (%s condition)", result.Condition)
+		}
+
+		// Suspicious: under 20% of market or over 3x market.
+		if ratio < 0.20 {
+			scores.IsSuspicious = true
+			reason := fmt.Sprintf("Price is only %.0f%% of typical market value — possible scam, missing parts, or stolen goods", ratio*100)
+			scores.SuspiciousReason = &reason
+		} else if ratio > 3.0 {
+			scores.IsSuspicious = true
+			reason := fmt.Sprintf("Price is %.1fx typical market value — extremely overpriced", ratio)
+			scores.SuspiciousReason = &reason
+		}
+	} else {
+		// No market data — score by condition alone.
+		switch result.Condition {
+		case "new", "open_box":
+			scores.DealScore = 6
+		case "like_new":
+			scores.DealScore = 5
+		case "good":
+			scores.DealScore = 5
+		case "fair":
+			scores.DealScore = 4
+		case "poor":
+			scores.DealScore = 3
+		case "damaged":
+			scores.DealScore = 2
+		default:
+			scores.DealScore = 5
+		}
+		scores.DealReasoning = "No market price data available for comparison"
+	}
+
+	return scores
 }
 
 // computeMarketScore looks up component prices and returns ask/sum_parts.
@@ -125,18 +220,4 @@ func (w *EnrichListingWorker) computeMarketScore(ctx context.Context, result *ll
 
 	score := result.PriceAmount / sumParts
 	return &score
-}
-
-// isDeal returns true when a listing qualifies as a deal worth alerting on.
-// A listing is a deal if:
-//   - deal_score >= 8 (LLM subjective quality score), OR
-//   - market_score <= 0.65 (asking ≤65% of the sum of component market prices)
-func isDeal(dealScore int, marketScore *float64) bool {
-	if dealScore >= 8 {
-		return true
-	}
-	if marketScore != nil && *marketScore <= 0.65 {
-		return true
-	}
-	return false
 }
