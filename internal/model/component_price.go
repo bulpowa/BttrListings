@@ -10,6 +10,6 @@ type ComponentPrice struct {
 	Category       string
 	PriceAmount    float64
 	PriceCurrency  string
-	SampleCount    int
+	SampleCount    int32
 	ScrapedAt      time.Time
 }

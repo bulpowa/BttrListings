@@ -5,14 +5,50 @@
 package db
 
 import (
-	"database/sql"
+	"time"
 )
+
+type ComponentPrice struct {
+	ID             int64
+	Name           string
+	NameNormalized string
+	Category       string
+	PriceAmount    float64
+	PriceCurrency  string
+	SampleCount    int32
+	ScrapedAt      time.Time
+}
+
+type Listing struct {
+	ID               int64
+	Url              string
+	UrlHash          string
+	Title            string
+	Description      *string
+	RawPrice         *string
+	RawHtml          *string
+	ScrapedAt        *time.Time
+	TitleNormalized  *string
+	PriceAmount      *float64
+	PriceCurrency    *string
+	Condition        *string
+	Category         *string
+	LocationCity     *string
+	Specs            []byte
+	DealScore        *int32
+	DealReasoning    *string
+	IsSuspicious     *bool
+	SuspiciousReason *string
+	EnrichmentStatus string
+	EnrichedAt       *time.Time
+	MarketScore      *float64
+}
 
 type User struct {
 	ID           int64
 	Username     string
 	PasswordHash string
-	CreatedAt    sql.NullTime
-	IsVerified   sql.NullBool
-	Role         sql.NullString
+	CreatedAt    *time.Time
+	IsVerified   *bool
+	Role         *string
 }

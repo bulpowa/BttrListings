@@ -38,11 +38,15 @@ func (s *authService) Login(ctx context.Context, req *model.LoginRequest) (*mode
 		return nil, repository.ErrInvalidPassword
 	}
 
-	if !user.IsVerified.Bool {
+	if user.IsVerified == nil || !*user.IsVerified {
 		return nil, repository.ErrUnverifiedUser
 	}
 
-	token, err := s.jwtService.CreateToken(user.Role.String)
+	role := ""
+	if user.Role != nil {
+		role = *user.Role
+	}
+	token, err := s.jwtService.CreateToken(role)
 	if err != nil {
 		return nil, repository.ErrInternalError
 	}

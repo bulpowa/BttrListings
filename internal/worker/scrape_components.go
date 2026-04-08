@@ -84,7 +84,7 @@ func (w *ScrapeComponentPriceWorker) Work(ctx context.Context, job *river.Job[Sc
 	}
 
 	normalized := normalizeComponentName(name)
-	if err := w.repo.ComponentPrice.Upsert(ctx, name, normalized, category, median, "BGN", len(prices)); err != nil {
+	if err := w.repo.ComponentPrice.Upsert(ctx, name, normalized, category, median, "BGN", int32(len(prices))); err != nil {
 		return fmt.Errorf("upsert component price %q: %w", name, err)
 	}
 
