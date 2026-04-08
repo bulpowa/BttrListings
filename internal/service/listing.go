@@ -85,6 +85,7 @@ func toListingResponse(r *model.ListingRow) *model.Listing {
 		DealReasoning:    r.DealReasoning,
 		IsSuspicious:     r.IsSuspicious,
 		SuspiciousReason: r.SuspiciousReason,
+		MarketScore:      r.MarketScore,
 		EnrichmentStatus: r.EnrichmentStatus,
 		EnrichedAt:       r.EnrichedAt,
 	}

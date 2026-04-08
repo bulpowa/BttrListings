@@ -16,7 +16,7 @@ type ListingRepository interface {
 	Insert(ctx context.Context, input *model.CreateListingInput) (int64, error)
 	GetByID(ctx context.Context, id int64) (*model.ListingRow, error)
 	GetAll(ctx context.Context, limit, offset int) ([]*model.ListingRow, error)
-	UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult) error
+	UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, marketScore *float64) error
 }
 
 type listingRepository struct {
@@ -82,7 +82,7 @@ func (r *listingRepository) GetAll(ctx context.Context, limit, offset int) ([]*m
 	return listings, rows.Err()
 }
 
-func (r *listingRepository) UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult) error {
+func (r *listingRepository) UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, marketScore *float64) error {
 	specsJSON, err := json.Marshal(result.Specs)
 	if err != nil {
 		specsJSON = []byte("{}")
@@ -90,25 +90,26 @@ func (r *listingRepository) UpdateEnrichment(ctx context.Context, id int64, resu
 
 	_, err = r.pool.Exec(ctx, `
 		UPDATE listings SET
-			title_normalized = $2,
-			price_amount     = $3,
-			price_currency   = $4,
-			condition        = $5,
-			category         = $6,
-			location_city    = $7,
-			specs            = $8,
-			deal_score       = $9,
-			deal_reasoning   = $10,
-			is_suspicious    = $11,
+			title_normalized  = $2,
+			price_amount      = $3,
+			price_currency    = $4,
+			condition         = $5,
+			category          = $6,
+			location_city     = $7,
+			specs             = $8,
+			deal_score        = $9,
+			deal_reasoning    = $10,
+			is_suspicious     = $11,
 			suspicious_reason = $12,
+			market_score      = $13,
 			enrichment_status = 'done',
-			enriched_at      = NOW()
+			enriched_at       = NOW()
 		WHERE id = $1 AND enriched_at IS NULL
 	`, id,
 		result.TitleNormalized, result.PriceAmount, result.PriceCurrency,
 		result.Condition, result.Category, result.LocationCity,
 		specsJSON, result.DealScore, result.DealReasoning,
-		result.IsSuspicious, result.SuspiciousReason)
+		result.IsSuspicious, result.SuspiciousReason, marketScore)
 	return err
 }
 
@@ -117,7 +118,7 @@ const listingSelectCols = `
 SELECT id, url, url_hash, title, description, raw_price, raw_html, scraped_at,
        title_normalized, price_amount, price_currency, condition, category, location_city,
        specs, deal_score, deal_reasoning, is_suspicious, suspicious_reason,
-       enrichment_status, enriched_at
+       market_score, enrichment_status, enriched_at
 FROM listings`
 
 type scannable interface {
@@ -131,7 +132,7 @@ func scanListing(row scannable) (*model.ListingRow, error) {
 		&l.ScrapedAt, &l.TitleNormalized, &l.PriceAmount, &l.PriceCurrency,
 		&l.Condition, &l.Category, &l.LocationCity, &l.Specs, &l.DealScore,
 		&l.DealReasoning, &l.IsSuspicious, &l.SuspiciousReason,
-		&l.EnrichmentStatus, &l.EnrichedAt,
+		&l.MarketScore, &l.EnrichmentStatus, &l.EnrichedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil

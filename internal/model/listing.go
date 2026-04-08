@@ -23,6 +23,7 @@ type ListingRow struct {
 	DealReasoning    *string
 	IsSuspicious     *bool
 	SuspiciousReason *string
+	MarketScore      *float64
 	EnrichmentStatus string
 	EnrichedAt       *time.Time
 }
@@ -46,6 +47,7 @@ type Listing struct {
 	DealReasoning    *string           `json:"deal_reasoning,omitempty"`
 	IsSuspicious     *bool             `json:"is_suspicious,omitempty"`
 	SuspiciousReason *string           `json:"suspicious_reason,omitempty"`
+	MarketScore      *float64          `json:"market_score,omitempty"`
 	EnrichmentStatus string            `json:"enrichment_status"`
 	EnrichedAt       *time.Time        `json:"enriched_at,omitempty"`
 }
