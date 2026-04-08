@@ -26,6 +26,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
@@ -36,13 +37,29 @@ import (
 )
 
 type Config struct {
-	DatabaseURL      string `env:"DATABASE_URL,required"`
-	JWTSecret        string `env:"JWT_SECRET,required"`
-	OllamaHost       string `env:"OLLAMA_HOST" envDefault:"http://localhost:11434"`
-	OllamaModel      string `env:"OLLAMA_MODEL" envDefault:"gemma4:27b"`
-	Port             string `env:"PORT" envDefault:"8080"`
-	ScraperURLs      string `env:"SCRAPER_URLS" envDefault:""`
-	AlertWebhookURL  string `env:"ALERT_WEBHOOK_URL" envDefault:""`
+	DatabaseURL     string `env:"DATABASE_URL,required"`
+	JWTSecret       string `env:"JWT_SECRET,required"`
+	OllamaHost      string `env:"OLLAMA_HOST" envDefault:"http://localhost:11434"`
+	OllamaModel     string `env:"OLLAMA_MODEL" envDefault:"gemma4:27b"`
+	Port            string `env:"PORT" envDefault:"8080"`
+	ScraperURLs     string `env:"SCRAPER_URLS" envDefault:""`
+	AlertWebhookURL string `env:"ALERT_WEBHOOK_URL" envDefault:""`
+}
+
+// defaultComponentSeeds is the baseline set of components to keep prices fresh for.
+// Add entries here to bootstrap the component price DB on first run.
+var defaultComponentSeeds = []worker.ComponentSeed{
+	{Name: "RTX 4060", Category: "gpu"},
+	{Name: "RTX 4060 Ti", Category: "gpu"},
+	{Name: "RTX 4070", Category: "gpu"},
+	{Name: "RTX 3060", Category: "gpu"},
+	{Name: "RTX 3070", Category: "gpu"},
+	{Name: "RTX 3080", Category: "gpu"},
+	{Name: "iPhone 13 128GB", Category: "phone"},
+	{Name: "iPhone 14 128GB", Category: "phone"},
+	{Name: "iPhone 15 128GB", Category: "phone"},
+	{Name: "MacBook Air M1", Category: "laptop"},
+	{Name: "MacBook Air M2", Category: "laptop"},
 }
 
 func main() {
@@ -101,13 +118,40 @@ func main() {
 	// Set up River workers.
 	notifier := alert.New(cfg.AlertWebhookURL)
 	workers := river.NewWorkers()
-	river.AddWorker(workers, worker.NewEnrichListingWorker(repo, ollamaClient, notifier))
+	enrichWorker := worker.NewEnrichListingWorker(repo, ollamaClient, notifier)
+	river.AddWorker(workers, enrichWorker)
+	river.AddWorker(workers, worker.NewScrapeComponentPriceWorker(repo))
 
-	riverClient, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
+	// insertComponentJob is defined before the River client so RefreshStaleComponentPricesWorker
+	// can close over riverClient — by the time jobs run, riverClient will be set.
+	var riverClient *river.Client[pgx.Tx]
+	insertComponentJob := func(ctx context.Context, args worker.ScrapeComponentPriceArgs) error {
+		_, err := riverClient.Insert(ctx, args, &river.InsertOpts{
+			UniqueOpts: river.UniqueOpts{ByArgs: true},
+		})
+		return err
+	}
+	river.AddWorker(workers, worker.NewRefreshStaleComponentPricesWorker(
+		repo, insertComponentJob, defaultComponentSeeds, 6*time.Hour,
+	))
+
+	// Wire component job insertion into the enrichment worker now that we have the closure.
+	enrichWorker.WithInsertComponentJobFn(insertComponentJob)
+
+	riverClient, err = river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 2},
 		},
 		Workers: workers,
+		PeriodicJobs: []*river.PeriodicJob{
+			river.NewPeriodicJob(
+				river.PeriodicInterval(6*time.Hour),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return worker.RefreshStaleComponentPricesArgs{}, nil
+				},
+				&river.PeriodicJobOpts{RunOnStart: true},
+			),
+		},
 	})
 	if err != nil {
 		log.Fatalf("river client: %v", err)

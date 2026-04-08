@@ -65,7 +65,7 @@ tr:nth-child(even){background:#fafafa}
 
 	// Table
 	sb.WriteString(`<table>
-<tr><th>#</th><th>title</th><th>price</th><th>score</th><th>condition</th><th>category</th><th>status</th><th>scraped</th></tr>
+<tr><th>#</th><th>title</th><th>price</th><th>score</th><th>mkt</th><th>condition</th><th>category</th><th>status</th><th>scraped</th></tr>
 `)
 
 	for i, l := range listings {
@@ -94,6 +94,19 @@ tr:nth-child(even){background:#fafafa}
 				cls = "score-mid"
 			}
 			scoreCell = fmt.Sprintf(`<span class="%s">%d</span>`, cls, *l.DealScore)
+		}
+
+		// Market score — show as percentage of market (lower = better deal)
+		mktCell := ""
+		if l.MarketScore != nil {
+			pct := int(*l.MarketScore * 100)
+			cls := "score-low"
+			if pct <= 65 {
+				cls = "score-high"
+			} else if pct <= 85 {
+				cls = "score-mid"
+			}
+			mktCell = fmt.Sprintf(`<span class="%s">%d%%</span>`, cls, pct)
 		}
 
 		// Condition
@@ -132,8 +145,8 @@ tr:nth-child(even){background:#fafafa}
 		}
 
 		sb.WriteString(fmt.Sprintf(
-			`<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class="%s">%s</td><td>%s</td></tr>`,
-			i+1, titleCell, price, scoreCell, cond, cat, statusClass, l.EnrichmentStatus, agoStr,
+			`<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class="%s">%s</td><td>%s</td></tr>`,
+			i+1, titleCell, price, scoreCell, mktCell, cond, cat, statusClass, l.EnrichmentStatus, agoStr,
 		))
 	}
 
