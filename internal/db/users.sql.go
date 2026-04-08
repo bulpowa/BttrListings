@@ -7,7 +7,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 )
 
 const createUser = `-- name: CreateUser :one
@@ -20,8 +19,9 @@ type CreateUserParams struct {
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (int64, error) {
+	row := q.db.QueryRow(ctx, createUser, arg.Username, arg.PasswordHash)
 	var id int64
-	err := q.db.QueryRowContext(ctx, createUser, arg.Username, arg.PasswordHash).Scan(&id)
+	err := row.Scan(&id)
 	return id, err
 }
 
@@ -30,7 +30,7 @@ SELECT id, username, password_hash, created_at, is_verified, role FROM users WHE
 `
 
 func (q *Queries) GetUnverifiedUsers(ctx context.Context) ([]User, error) {
-	rows, err := q.db.QueryContext(ctx, getUnverifiedUsers)
+	rows, err := q.db.Query(ctx, getUnverifiedUsers)
 	if err != nil {
 		return nil, err
 	}
@@ -50,9 +50,6 @@ func (q *Queries) GetUnverifiedUsers(ctx context.Context) ([]User, error) {
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -64,7 +61,7 @@ SELECT id, username, password_hash, created_at, is_verified, role FROM users WHE
 `
 
 func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
-	row := q.db.QueryRowContext(ctx, getUserByUsername, username)
+	row := q.db.QueryRow(ctx, getUserByUsername, username)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -82,13 +79,13 @@ UPDATE users SET is_verified = $1 WHERE id = $2 RETURNING is_verified
 `
 
 type VerifyUserParams struct {
-	IsVerified sql.NullBool
+	IsVerified *bool
 	ID         int64
 }
 
-func (q *Queries) VerifyUser(ctx context.Context, arg VerifyUserParams) (sql.NullBool, error) {
-	row := q.db.QueryRowContext(ctx, verifyUser, arg.IsVerified, arg.ID)
-	var is_verified sql.NullBool
+func (q *Queries) VerifyUser(ctx context.Context, arg VerifyUserParams) (*bool, error) {
+	row := q.db.QueryRow(ctx, verifyUser, arg.IsVerified, arg.ID)
+	var is_verified *bool
 	err := row.Scan(&is_verified)
 	return is_verified, err
 }

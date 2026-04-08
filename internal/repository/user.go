@@ -1,12 +1,14 @@
 package repository
 
 import (
-	"OlxScraper/internal/db"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
+
+	"OlxScraper/internal/db"
+
+	"github.com/jackc/pgx/v5"
 )
 
 var (
@@ -38,19 +40,18 @@ func (r *userRepository) Create(ctx context.Context, user *db.User) (*int64, err
 		PasswordHash: user.PasswordHash,
 	})
 	if err != nil {
-		// Postgres: "duplicate key value violates unique constraint"
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return nil, ErrDuplicateUsername
 		}
 		return nil, err
 	}
 	return &userId, nil
-
 }
+
 func (r *userRepository) FindByUsername(ctx context.Context, username string) (*db.User, error) {
 	user, err := r.queries.GetUserByUsername(ctx, username)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUserNotFound
 		}
 		fmt.Println(err)
@@ -64,23 +65,21 @@ func (r *userRepository) FindByUsername(ctx context.Context, username string) (*
 		PasswordHash: user.PasswordHash,
 	}, nil
 }
+
 func (r *userRepository) Verify(ctx context.Context, id int) (*bool, error) {
+	trueVal := true
 	isVerified, err := r.queries.VerifyUser(ctx, db.VerifyUserParams{
-		IsVerified: sql.NullBool{Bool: true, Valid: true},
+		IsVerified: &trueVal,
 		ID:         int64(id),
 	})
-
 	if err != nil {
 		fmt.Println(err)
 		return nil, ErrInternalError
 	}
-
-	if !isVerified.Valid && isVerified.Bool {
+	if isVerified == nil {
 		return nil, ErrUserNotFound
 	}
-
-	return &isVerified.Bool, nil
-
+	return isVerified, nil
 }
 
 func (r *userRepository) GetUnverifiedUsers(ctx context.Context) ([]db.User, error) {

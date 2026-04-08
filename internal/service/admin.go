@@ -40,11 +40,16 @@ func (s *adminService) GetUnverifiedUsers(ctx context.Context) ([]model.User, er
 	}
 	users := make([]model.User, len(dbUsers))
 	for i, dbUser := range dbUsers {
+		isVerified := dbUser.IsVerified != nil && *dbUser.IsVerified
+		createdAt := ""
+		if dbUser.CreatedAt != nil {
+			createdAt = dbUser.CreatedAt.String()
+		}
 		users[i] = model.User{
 			ID:         dbUser.ID,
 			Username:   dbUser.Username,
-			CreatedAt:  dbUser.CreatedAt.Time.String(),
-			IsVerified: dbUser.IsVerified.Bool,
+			CreatedAt:  createdAt,
+			IsVerified: isVerified,
 		}
 	}
 	return users, nil

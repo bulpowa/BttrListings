@@ -15,7 +15,6 @@ import (
 	"OlxScraper/internal/alert"
 	"OlxScraper/internal/api/router"
 	"OlxScraper/internal/auth"
-	sqlcDb "OlxScraper/internal/db"
 	"OlxScraper/internal/llm"
 	"OlxScraper/internal/repository"
 	"OlxScraper/internal/scraper"
@@ -28,7 +27,6 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -106,13 +104,8 @@ func main() {
 	}
 	pingCancel()
 
-	// sqlc queries use database/sql interface via pgx stdlib adapter.
-	sqlDB := stdlib.OpenDBFromPool(pool)
-	defer sqlDB.Close()
-	queries := sqlcDb.New(sqlDB)
-
 	// Set up repositories and services.
-	repo := repository.New(queries, pool)
+	repo := repository.New(pool)
 	jwtService := auth.NewJWTService(cfg.JWTSecret)
 
 	// Set up River workers.
