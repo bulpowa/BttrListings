@@ -188,3 +188,62 @@ func fetchTestPage(t *testing.T, url string) string {
 	}
 	return string(b)
 }
+
+// --- filteredPrices ---
+
+func TestFilteredPrices_DropsCompleteSystemsByKeyword(t *testing.T) {
+	candidates := []pricedListing{
+		{title: "RTX 4060 8GB ASUS TUF", price: 600},
+		{title: "RTX 4060 Gigabyte Gaming OC", price: 650},
+		{title: "Геймърски компютър RTX 4060 i7", price: 2800}, // should be dropped
+		{title: "Gaming laptop RTX 4060 16GB", price: 3200},    // should be dropped
+		{title: "RTX 4060 MSI Ventus", price: 580},
+	}
+	got := filteredPrices(candidates)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 prices after keyword filter, got %d: %v", len(got), got)
+	}
+	for _, p := range got {
+		if p > 1000 {
+			t.Errorf("complete-system price %.0f leaked through filter", p)
+		}
+	}
+}
+
+func TestFilteredPrices_IQRRemovesOutliers(t *testing.T) {
+	// All standalone GPU titles, but one extreme outlier price.
+	candidates := []pricedListing{
+		{title: "RTX 4060", price: 550},
+		{title: "RTX 4060", price: 600},
+		{title: "RTX 4060", price: 620},
+		{title: "RTX 4060", price: 580},
+		{title: "RTX 4060", price: 610},
+		{title: "RTX 4060", price: 590},
+		{title: "RTX 4060", price: 5000}, // extreme outlier (data error / wrong listing)
+	}
+	got := filteredPrices(candidates)
+	for _, p := range got {
+		if p > 1000 {
+			t.Errorf("outlier price %.0f leaked through IQR filter", p)
+		}
+	}
+}
+
+func TestFilteredPrices_EmptyInput(t *testing.T) {
+	got := filteredPrices(nil)
+	if len(got) != 0 {
+		t.Errorf("expected empty result for nil input, got %v", got)
+	}
+}
+
+func TestFilteredPrices_TooFewForIQR(t *testing.T) {
+	// With <4 prices, IQR is skipped — all kept prices are returned as-is.
+	candidates := []pricedListing{
+		{title: "RTX 4060", price: 600},
+		{title: "RTX 4060", price: 700},
+	}
+	got := filteredPrices(candidates)
+	if len(got) != 2 {
+		t.Errorf("expected 2 prices when IQR skipped, got %d", len(got))
+	}
+}

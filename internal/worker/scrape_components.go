@@ -115,7 +115,8 @@ func (w *ScrapeComponentPriceWorker) scrapePricePage(ctx context.Context, name s
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	return parsePricesFromPage(string(body)), nil
+	candidates := parseCandidatesFromPage(string(body))
+	return filteredPrices(candidates), nil
 }
 
 // --- RefreshStaleComponentPricesWorker ---
@@ -193,23 +194,44 @@ func (w *RefreshStaleComponentPricesWorker) Work(ctx context.Context, _ *river.J
 
 // --- price parsing helpers ---
 
-// parsePricesFromPage walks an OLX search results page and extracts BGN amounts from
-// <p data-testid="ad-price"> elements. Returns an empty (non-nil) slice on no results.
-func parsePricesFromPage(rawHTML string) []float64 {
+// pricedListing pairs a listing title with its parsed BGN price.
+type pricedListing struct {
+	title string
+	price float64
+}
+
+// systemKeywords are substrings that indicate a complete system rather than a
+// standalone component. Listings matching any keyword are excluded from price samples
+// to prevent full PC / laptop prices from skewing the component median.
+var systemKeywords = []string{
+	// Bulgarian
+	"компютър", "лаптоп", "конфигурац", "комплект", "кула", "система",
+	// English
+	"laptop", "notebook", "desktop", "gaming pc", "pc build",
+	"complete", "bundle", "workstation",
+}
+
+// parseCandidatesFromPage walks an OLX search results page and extracts
+// (title, price) pairs from <p data-testid="ad-price"> elements.
+// The title is found by walking up the DOM to the nearest <h4> in the card.
+func parseCandidatesFromPage(rawHTML string) []pricedListing {
 	doc, err := html.Parse(strings.NewReader(rawHTML))
 	if err != nil {
 		log.Printf("component scraper: html parse error: %v", err)
-		return []float64{}
+		return nil
 	}
 
-	prices := []float64{}
+	var candidates []pricedListing
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type == html.ElementNode && n.Data == "p" {
 			for _, a := range n.Attr {
 				if a.Key == "data-testid" && a.Val == "ad-price" {
 					if p := parseBGNPrice(n); p > 0 {
-						prices = append(prices, p)
+						candidates = append(candidates, pricedListing{
+							title: cardTitleNear(n),
+							price: p,
+						})
 					}
 					return
 				}
@@ -220,11 +242,116 @@ func parsePricesFromPage(rawHTML string) []float64 {
 		}
 	}
 	walk(doc)
+	return candidates
+}
 
-	if len(prices) == 0 {
+// parsePricesFromPage is the existing API used by tests and callers that don't
+// need filtering. It returns raw prices from the page without any filtering.
+func parsePricesFromPage(rawHTML string) []float64 {
+	candidates := parseCandidatesFromPage(rawHTML)
+	if len(candidates) == 0 {
 		log.Printf("component scraper: no ad-price elements found — OLX page structure may have changed")
+		return []float64{}
+	}
+	prices := make([]float64, 0, len(candidates))
+	for _, c := range candidates {
+		prices = append(prices, c.price)
 	}
 	return prices
+}
+
+// filteredPrices applies two-stage filtering to a candidate list:
+//  1. Keyword filter: drops listings whose title suggests a complete system.
+//  2. IQR outlier removal: drops prices outside Q1-1.5×IQR … Q3+1.5×IQR.
+//
+// This prevents full gaming PC / laptop listings from skewing the median upward
+// when searching for a standalone component like "RTX 4060".
+func filteredPrices(candidates []pricedListing) []float64 {
+	// Stage 1: keyword filter.
+	var kept []float64
+	var dropped int
+	for _, c := range candidates {
+		lower := strings.ToLower(c.title)
+		skip := false
+		for _, kw := range systemKeywords {
+			if strings.Contains(lower, kw) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			dropped++
+			continue
+		}
+		kept = append(kept, c.price)
+	}
+	if dropped > 0 {
+		log.Printf("component scraper: keyword filter dropped %d complete-system listings", dropped)
+	}
+
+	// Stage 2: IQR outlier removal (needs at least 4 prices to be meaningful).
+	if len(kept) < 4 {
+		return kept
+	}
+	sorted := make([]float64, len(kept))
+	copy(sorted, kept)
+	sort.Float64s(sorted)
+	n := len(sorted)
+	q1 := sorted[n/4]
+	q3 := sorted[3*n/4]
+	iqr := q3 - q1
+	if iqr == 0 {
+		return kept
+	}
+	lower := q1 - 1.5*iqr
+	upper := q3 + 1.5*iqr
+	result := kept[:0]
+	for _, p := range kept {
+		if p >= lower && p <= upper {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// cardTitleNear walks up from a DOM node up to 10 levels looking for the
+// nearest ancestor that contains an <h4> element (OLX listing card title).
+func cardTitleNear(n *html.Node) string {
+	node := n.Parent
+	for i := 0; i < 10 && node != nil; i++ {
+		if t := firstH4Text(node); t != "" {
+			return t
+		}
+		node = node.Parent
+	}
+	return ""
+}
+
+func firstH4Text(n *html.Node) string {
+	if n.Type == html.ElementNode && n.Data == "h4" {
+		return nodeText(n)
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if t := firstH4Text(c); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+func nodeText(n *html.Node) string {
+	var b strings.Builder
+	var collect func(*html.Node)
+	collect = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			b.WriteString(node.Data)
+		}
+		for c := node.FirstChild; c != nil; c = c.NextSibling {
+			collect(c)
+		}
+	}
+	collect(n)
+	return strings.TrimSpace(b.String())
 }
 
 // parseBGNPrice extracts the BGN float from the first text node of a price element.
