@@ -53,43 +53,69 @@ func (w *ScrapeComponentPriceWorker) Work(ctx context.Context, job *river.Job[Sc
 	name := job.Args.Name
 	category := job.Args.Category
 
-	searchURL := buildSearchURL(name)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+	// Scrape up to 3 pages for a better median sample.
+	var allPrices []float64
+	for page := 1; page <= 3; page++ {
+		prices, err := w.scrapePricePage(ctx, name, page)
+		if err != nil {
+			log.Printf("component scraper: %q page %d: %v", name, page, err)
+			break
+		}
+		allPrices = append(allPrices, prices...)
+		if len(prices) == 0 {
+			break // no more results on this page
+		}
+		// Brief pause between pages — be polite to OLX.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("fetch %s: %w", searchURL, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read body: %w", err)
-	}
-
-	prices := parsePricesFromPage(string(body))
-	if len(prices) == 0 {
-		// Warning already logged by parsePricesFromPage. Not an error — don't retry.
+	if len(allPrices) == 0 {
+		log.Printf("component scraper: %q — no prices found across all pages", name)
 		return nil
 	}
 
-	median := medianPrice(prices)
+	median := medianPrice(allPrices)
 	if median <= 0 {
 		return nil
 	}
 
 	normalized := normalizeComponentName(name)
-	if err := w.repo.ComponentPrice.Upsert(ctx, name, normalized, category, median, "BGN", int32(len(prices))); err != nil {
+	if err := w.repo.ComponentPrice.Upsert(ctx, name, normalized, category, median, "BGN", int32(len(allPrices))); err != nil {
 		return fmt.Errorf("upsert component price %q: %w", name, err)
 	}
 
-	log.Printf("component scraper: %q → median %.2f BGN (from %d listings)", name, median, len(prices))
+	log.Printf("component scraper: %q → median %.2f BGN (from %d listings across pages)", name, median, len(allPrices))
 	return nil
+}
+
+func (w *ScrapeComponentPriceWorker) scrapePricePage(ctx context.Context, name string, page int) ([]float64, error) {
+	searchURL := buildSearchURL(name)
+	if page > 1 {
+		searchURL += fmt.Sprintf("?page=%d", page)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	resp, err := w.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", searchURL, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	return parsePricesFromPage(string(body)), nil
 }
 
 // --- RefreshStaleComponentPricesWorker ---

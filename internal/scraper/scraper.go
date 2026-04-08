@@ -110,6 +110,7 @@ func (s *Scraper) insertListing(ctx context.Context, input *model.CreateListingI
 		}
 
 		_, err = s.river.InsertTx(ctx, tx, worker.EnrichListingArgs{ListingID: id}, &river.InsertOpts{
+			Queue:      worker.QueueEnrich,
 			UniqueOpts: river.UniqueOpts{ByArgs: true},
 		})
 		return err

@@ -133,7 +133,10 @@ func main() {
 
 	riverClient, err = river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: 2},
+			// Enrichment is LLM-bound: 2 workers matches typical local LLM concurrency.
+			worker.QueueEnrich: {MaxWorkers: 2},
+			// Component scraping is I/O-bound (HTTP): more parallelism is fine.
+			river.QueueDefault: {MaxWorkers: 3},
 		},
 		Workers: workers,
 		PeriodicJobs: []*river.PeriodicJob{
@@ -153,6 +156,7 @@ func main() {
 	// EnqueueFn wires River into the service layer without importing River there.
 	enqueueFn := func(ctx context.Context, listingID int64) error {
 		_, err := riverClient.Insert(ctx, worker.EnrichListingArgs{ListingID: listingID}, &river.InsertOpts{
+			Queue:      worker.QueueEnrich,
 			UniqueOpts: river.UniqueOpts{ByArgs: true},
 		})
 		return err
