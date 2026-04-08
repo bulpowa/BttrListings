@@ -9,6 +9,41 @@ import (
 	"context"
 )
 
+const getAllComponentPrices = `-- name: GetAllComponentPrices :many
+SELECT id, name, name_normalized, category, price_amount, price_currency, sample_count, scraped_at
+FROM component_prices
+ORDER BY category ASC, name ASC
+`
+
+func (q *Queries) GetAllComponentPrices(ctx context.Context) ([]ComponentPrice, error) {
+	rows, err := q.db.Query(ctx, getAllComponentPrices)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ComponentPrice
+	for rows.Next() {
+		var i ComponentPrice
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.NameNormalized,
+			&i.Category,
+			&i.PriceAmount,
+			&i.PriceCurrency,
+			&i.SampleCount,
+			&i.ScrapedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getComponentPriceByNormalizedName = `-- name: GetComponentPriceByNormalizedName :one
 SELECT id, name, name_normalized, category, price_amount, price_currency, sample_count, scraped_at
 FROM component_prices

@@ -1,3 +1,8 @@
+-- name: GetAllComponentPrices :many
+SELECT id, name, name_normalized, category, price_amount, price_currency, sample_count, scraped_at
+FROM component_prices
+ORDER BY category ASC, name ASC;
+
 -- name: UpsertComponentPrice :exec
 INSERT INTO component_prices (name, name_normalized, category, price_amount, price_currency, sample_count, scraped_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
