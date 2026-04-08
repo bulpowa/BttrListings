@@ -244,17 +244,17 @@ func (c *OllamaClient) extractOnce(ctx context.Context, text string, temperature
 
 	content := chatResp.Choices[0].Message.Content
 
-	// Strip markdown code fences if the model wraps JSON in ```json ... ```
-	if idx := strings.Index(content, "{"); idx > 0 {
-		content = content[idx:]
+	// Strip any preamble/markdown and extract the JSON object.
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start == -1 || end == -1 || end < start {
+		return nil, fmt.Errorf("no JSON object in LLM response: %q", content)
 	}
-	if idx := strings.LastIndex(content, "}"); idx >= 0 && idx < len(content)-1 {
-		content = content[:idx+1]
-	}
+	content = content[start : end+1]
 
 	var result ExtractionResult
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return nil, fmt.Errorf("parse extraction JSON: %w", err)
+		return nil, fmt.Errorf("parse extraction JSON: %w (raw: %q)", err, content)
 	}
 
 	return &result, nil
