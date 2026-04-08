@@ -21,6 +21,11 @@ FROM listings
 ORDER BY scraped_at DESC
 LIMIT $1 OFFSET $2;
 
+-- name: ResetListingEnrichment :exec
+UPDATE listings
+SET enriched_at = NULL, enrichment_status = 'pending'
+WHERE id = $1;
+
 -- name: UpdateListingEnrichment :exec
 UPDATE listings SET
     title_normalized  = $2,

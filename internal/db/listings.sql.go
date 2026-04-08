@@ -187,6 +187,17 @@ func (q *Queries) InsertListing(ctx context.Context, arg InsertListingParams) (i
 	return id, err
 }
 
+const resetListingEnrichment = `-- name: ResetListingEnrichment :exec
+UPDATE listings
+SET enriched_at = NULL, enrichment_status = 'pending'
+WHERE id = $1
+`
+
+func (q *Queries) ResetListingEnrichment(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, resetListingEnrichment, id)
+	return err
+}
+
 const updateListingEnrichment = `-- name: UpdateListingEnrichment :exec
 UPDATE listings SET
     title_normalized  = $2,

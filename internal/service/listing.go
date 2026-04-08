@@ -63,6 +63,10 @@ func (s *listingService) ReEnrich(ctx context.Context, id int64) error {
 	if row == nil {
 		return ErrListingNotFound
 	}
+	// Clear enriched_at so the worker doesn't skip it as already done.
+	if err := s.repo.Listing.ResetEnrichment(ctx, id); err != nil {
+		return err
+	}
 	return s.enqueue(ctx, id)
 }
 

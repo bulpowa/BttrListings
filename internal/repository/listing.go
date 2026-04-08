@@ -18,6 +18,7 @@ type ListingRepository interface {
 	Insert(ctx context.Context, input *model.CreateListingInput) (int64, error)
 	GetByID(ctx context.Context, id int64) (*model.ListingRow, error)
 	GetAll(ctx context.Context, limit, offset int) ([]*model.ListingRow, error)
+	ResetEnrichment(ctx context.Context, id int64) error
 	UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error
 }
 
@@ -86,6 +87,10 @@ func (r *listingRepository) GetAll(ctx context.Context, limit, offset int) ([]*m
 		listings = append(listings, getListingsRowToModel(row))
 	}
 	return listings, nil
+}
+
+func (r *listingRepository) ResetEnrichment(ctx context.Context, id int64) error {
+	return r.q.ResetListingEnrichment(ctx, id)
 }
 
 func (r *listingRepository) UpdateEnrichment(ctx context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
