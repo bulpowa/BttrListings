@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"OlxScraper/internal/alert"
 	"OlxScraper/internal/llm"
 	"OlxScraper/internal/model"
 	"OlxScraper/internal/repository"
@@ -63,7 +64,7 @@ func newTestWorker(
 	srv := httptest.NewServer(llmHandler)
 	client := llm.NewOllamaClient(srv.URL, "test-model")
 	repo := &repository.Repository{Listing: mock}
-	return worker.NewEnrichListingWorker(repo, client), srv
+	return worker.NewEnrichListingWorker(repo, client, alert.New("")), srv
 }
 
 func newJob(listingID int64) *river.Job[worker.EnrichListingArgs] {
