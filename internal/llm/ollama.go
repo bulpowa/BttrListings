@@ -27,8 +27,18 @@ Schema:
   "deal_score": 1-10,
   "deal_reasoning": "string",
   "is_suspicious": true|false,
-  "suspicious_reason": "string or null"
+  "suspicious_reason": "string or null",
+  "components": ["canonical model name", ...]
 }
+
+For "components": list the canonical product model names identifiable in this listing.
+Rules:
+- Use the shortest unambiguous model identifier: "RTX 4060" not "NVIDIA GeForce RTX 4060 Gaming OC".
+- "RTX 4060 Ti" and "RTX 4060 Super" are distinct — include the suffix.
+- Include storage/RAM only when it meaningfully affects price: "iPhone 13 128GB" vs "iPhone 13 256GB".
+- Bundles: "RTX 4060 Minecraft Edition" → ["RTX 4060"] (the GPU is the component, the game is not).
+- Full PC listings: include CPU + GPU separately e.g. ["i7-12700K", "RTX 3070"].
+- Output [] when no specific identifiable components are present (furniture, cars, clothing, etc.).
 
 Scoring guide for deal_score (1-10):
 - 9-10: Pristine condition, priced 20%+ below typical market value for this category

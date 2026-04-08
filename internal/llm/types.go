@@ -13,4 +13,7 @@ type ExtractionResult struct {
 	DealReasoning    string            `json:"deal_reasoning"`
 	IsSuspicious     bool              `json:"is_suspicious"`
 	SuspiciousReason *string           `json:"suspicious_reason"`
+	// Components is a list of canonical product model names found in this listing.
+	// Used for market-based pricing. Empty when no identifiable components are present.
+	Components []string `json:"components"`
 }
