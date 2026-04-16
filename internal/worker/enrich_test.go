@@ -416,3 +416,110 @@ func TestEnrichWorker_NoComponentsNoMarketScore(t *testing.T) {
 	err := w.Work(context.Background(), newJob(22))
 	require.NoError(t, err)
 }
+
+func TestEnrichWorker_PartialComponentMatch_NoMarketScore(t *testing.T) {
+	// LLM extracts ["CPU", "GPU"] but only GPU is in DB.
+	// Previously this produced a misleading partial score. Now it must return nil.
+	raw := "Gaming PC with CPU and GPU"
+	listing := &model.ListingRow{ID: 23, Title: "Gaming PC", RawHTML: &raw}
+
+	var savedScores model.EnrichedScores
+	listingMock := &mockListingRepo{
+		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
+			return listing, nil
+		},
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
+			savedScores = scores
+			return nil
+		},
+	}
+
+	componentMock := &mockComponentPriceRepo{
+		fnGetByNormalizedName: func(_ context.Context, name string) (*model.ComponentPrice, error) {
+			if name == "rtx 4060" {
+				return &model.ComponentPrice{Name: "RTX 4060", PriceAmount: 900}, nil
+			}
+			return nil, nil // i7-12700K not in DB
+		},
+	}
+
+	w, srv := newTestWorkerWithComponentRepo(listingMock, componentMock, func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.Write(ollamaResponse(extractionWithComponents([]string{"i7-12700K", "RTX 4060"}, 2000)))
+	})
+	defer srv.Close()
+
+	err := w.Work(context.Background(), newJob(23))
+	require.NoError(t, err)
+	assert.Nil(t, savedScores.MarketScore, "partial match must not produce a market score — would be misleading")
+}
+
+func TestEnrichWorker_SuspiciousLow_Flagged(t *testing.T) {
+	// ratio = 100 / 1000 = 0.10 < 0.20 → IsSuspicious = true (possible scam)
+	raw := "RTX 4060 — great deal"
+	listing := &model.ListingRow{ID: 30, Title: "RTX 4060", RawHTML: &raw}
+
+	var savedScores model.EnrichedScores
+	listingMock := &mockListingRepo{
+		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
+			return listing, nil
+		},
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
+			savedScores = scores
+			return nil
+		},
+	}
+
+	componentMock := &mockComponentPriceRepo{
+		fnGetByNormalizedName: func(_ context.Context, name string) (*model.ComponentPrice, error) {
+			return &model.ComponentPrice{Name: "RTX 4060", PriceAmount: 1000}, nil
+		},
+	}
+
+	w, srv := newTestWorkerWithComponentRepo(listingMock, componentMock, func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.Write(ollamaResponse(extractionWithComponents([]string{"RTX 4060"}, 100))) // 100/1000 = 0.10
+	})
+	defer srv.Close()
+
+	err := w.Work(context.Background(), newJob(30))
+	require.NoError(t, err)
+	assert.True(t, savedScores.IsSuspicious, "price at 10% of market value should be flagged suspicious")
+	require.NotNil(t, savedScores.SuspiciousReason)
+	assert.Contains(t, *savedScores.SuspiciousReason, "scam")
+}
+
+func TestEnrichWorker_SuspiciousHigh_Flagged(t *testing.T) {
+	// ratio = 4000 / 1000 = 4.0 > 3.0 → IsSuspicious = true (extremely overpriced)
+	raw := "RTX 4060 — premium listing"
+	listing := &model.ListingRow{ID: 31, Title: "RTX 4060", RawHTML: &raw}
+
+	var savedScores model.EnrichedScores
+	listingMock := &mockListingRepo{
+		fnGetByID: func(_ context.Context, id int64) (*model.ListingRow, error) {
+			return listing, nil
+		},
+		fnUpdateEnrichment: func(_ context.Context, id int64, result *llm.ExtractionResult, scores model.EnrichedScores) error {
+			savedScores = scores
+			return nil
+		},
+	}
+
+	componentMock := &mockComponentPriceRepo{
+		fnGetByNormalizedName: func(_ context.Context, name string) (*model.ComponentPrice, error) {
+			return &model.ComponentPrice{Name: "RTX 4060", PriceAmount: 1000}, nil
+		},
+	}
+
+	w, srv := newTestWorkerWithComponentRepo(listingMock, componentMock, func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.Write(ollamaResponse(extractionWithComponents([]string{"RTX 4060"}, 4000))) // 4000/1000 = 4.0
+	})
+	defer srv.Close()
+
+	err := w.Work(context.Background(), newJob(31))
+	require.NoError(t, err)
+	assert.True(t, savedScores.IsSuspicious, "price at 4x market value should be flagged suspicious")
+	require.NotNil(t, savedScores.SuspiciousReason)
+	assert.Contains(t, *savedScores.SuspiciousReason, "overpriced")
+}

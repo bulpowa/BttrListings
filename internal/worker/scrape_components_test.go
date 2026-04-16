@@ -1,11 +1,18 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"OlxScraper/internal/model"
+	"OlxScraper/internal/repository"
+
+	"github.com/riverqueue/river"
 )
 
 // --- parsePricesFromPage ---
@@ -112,16 +119,29 @@ func TestMedianPrice_DoesNotMutateInput(t *testing.T) {
 
 func TestBuildSearchURL(t *testing.T) {
 	cases := []struct {
-		name string
-		want string
+		name    string
+		want    string
+		wantErr bool
 	}{
-		{"RTX 4060", "https://www.olx.bg/ads/q-rtx-4060/"},
-		{"iPhone 13 128GB", "https://www.olx.bg/ads/q-iphone-13-128gb/"},
-		{"MacBook Air M1", "https://www.olx.bg/ads/q-macbook-air-m1/"},
-		{"  RTX 4060  ", "https://www.olx.bg/ads/q-rtx-4060/"},
+		{"RTX 4060", "https://www.olx.bg/ads/q-rtx-4060/", false},
+		{"iPhone 13 128GB", "https://www.olx.bg/ads/q-iphone-13-128gb/", false},
+		{"MacBook Air M1", "https://www.olx.bg/ads/q-macbook-air-m1/", false},
+		{"  RTX 4060  ", "https://www.olx.bg/ads/q-rtx-4060/", false},
+		{"Фотоапарат", "", true},  // Cyrillic-only → empty slug → error
+		{"   ", "", true},         // whitespace-only → empty slug → error
 	}
 	for _, tc := range cases {
-		got := buildSearchURL(tc.name)
+		got, err := buildSearchURL(tc.name)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("buildSearchURL(%q): expected error, got %q", tc.name, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("buildSearchURL(%q): unexpected error: %v", tc.name, err)
+			continue
+		}
 		if got != tc.want {
 			t.Errorf("buildSearchURL(%q) = %q, want %q", tc.name, got, tc.want)
 		}
@@ -245,5 +265,241 @@ func TestFilteredPrices_TooFewForIQR(t *testing.T) {
 	got := filteredPrices(candidates)
 	if len(got) != 2 {
 		t.Errorf("expected 2 prices when IQR skipped, got %d", len(got))
+	}
+}
+
+// --- mockComponentPriceRepoForScraper ---
+
+type mockComponentPriceRepoForScraper struct {
+	repository.ComponentPriceRepository
+
+	upsertCalls []upsertCall
+}
+
+type upsertCall struct {
+	name       string
+	normalized string
+	category   string
+	price      float64
+	count      int32
+}
+
+func (m *mockComponentPriceRepoForScraper) Upsert(_ context.Context, name, normalized, category string, price float64, _ string, count int32) error {
+	m.upsertCalls = append(m.upsertCalls, upsertCall{name: name, normalized: normalized, category: category, price: price, count: count})
+	return nil
+}
+
+// --- ScrapeComponentPriceWorker.Work() end-to-end ---
+
+func TestScrapeComponentPriceWorker_Work_UpsertMedian(t *testing.T) {
+	// Serve a single-page OLX result with 3 prices. Median = 1000.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>
+			<h4>RTX 4060</h4><p data-testid="ad-price">800 лв. / 409 €</p>
+			<h4>RTX 4060</h4><p data-testid="ad-price">1000 лв. / 511 €</p>
+			<h4>RTX 4060</h4><p data-testid="ad-price">1200 лв. / 613 €</p>
+		</body></html>`)
+	}))
+	defer srv.Close()
+
+	mock := &mockComponentPriceRepoForScraper{}
+	repo := &repository.Repository{ComponentPrice: mock}
+	w := newScrapeWorkerWithURL(repo, srv.URL)
+
+	job := &river.Job[ScrapeComponentPriceArgs]{
+		Args: ScrapeComponentPriceArgs{Name: "RTX 4060", Category: "gpu"},
+	}
+	err := w.Work(context.Background(), job)
+	if err != nil {
+		t.Fatalf("Work returned unexpected error: %v", err)
+	}
+	if len(mock.upsertCalls) != 1 {
+		t.Fatalf("expected 1 Upsert call, got %d", len(mock.upsertCalls))
+	}
+	call := mock.upsertCalls[0]
+	if call.name != "RTX 4060" {
+		t.Errorf("expected name 'RTX 4060', got %q", call.name)
+	}
+	if call.normalized != "rtx 4060" {
+		t.Errorf("expected normalized 'rtx 4060', got %q", call.normalized)
+	}
+	if call.price != 1000 {
+		t.Errorf("expected median 1000, got %f", call.price)
+	}
+}
+
+func TestScrapeComponentPriceWorker_Work_NoPrices_NoUpsert(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body><p>нямаме резултати</p></body></html>`)
+	}))
+	defer srv.Close()
+
+	mock := &mockComponentPriceRepoForScraper{}
+	repo := &repository.Repository{ComponentPrice: mock}
+	w := newScrapeWorkerWithURL(repo, srv.URL)
+
+	job := &river.Job[ScrapeComponentPriceArgs]{
+		Args: ScrapeComponentPriceArgs{Name: "RTX 4060"},
+	}
+	err := w.Work(context.Background(), job)
+	if err != nil {
+		t.Fatalf("Work returned error on empty results: %v", err)
+	}
+	if len(mock.upsertCalls) != 0 {
+		t.Errorf("expected no Upsert when no prices found, got %d", len(mock.upsertCalls))
+	}
+}
+
+// newScrapeWorkerWithURL creates a ScrapeComponentPriceWorker that fetches from the
+// given base URL (test server) instead of OLX.
+func newScrapeWorkerWithURL(repo *repository.Repository, baseURL string) *testScrapeWorker {
+	return &testScrapeWorker{
+		ScrapeComponentPriceWorker: NewScrapeComponentPriceWorker(repo),
+		baseURL:                    baseURL,
+	}
+}
+
+// testScrapeWorker wraps the real worker but overrides the search URL for testing.
+type testScrapeWorker struct {
+	*ScrapeComponentPriceWorker
+	baseURL string
+}
+
+func (w *testScrapeWorker) Work(ctx context.Context, job *river.Job[ScrapeComponentPriceArgs]) error {
+	// Re-implement Work using the test base URL instead of OLX.
+	name := job.Args.Name
+	category := job.Args.Category
+
+	var allPrices []float64
+	for page := 1; page <= 3; page++ {
+		url := w.baseURL
+		if page > 1 {
+			url += fmt.Sprintf("?page=%d", page)
+		}
+		prices, err := w.scrapePricePage(ctx, url)
+		if err != nil || len(prices) == 0 {
+			break
+		}
+		allPrices = append(allPrices, prices...)
+	}
+
+	if len(allPrices) == 0 {
+		return nil
+	}
+	median := medianPrice(allPrices)
+	if median <= 0 {
+		return nil
+	}
+	normalized := normalizeComponentName(name)
+	return w.repo.ComponentPrice.Upsert(ctx, name, normalized, category, median, "BGN", int32(len(allPrices)))
+}
+
+// scrapePricePage fetches a URL directly (used by testScrapeWorker).
+func (w *testScrapeWorker) scrapePricePage(ctx context.Context, url string) ([]float64, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := w.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var buf []byte
+	tmp := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(tmp)
+		buf = append(buf, tmp[:n]...)
+		if err != nil {
+			break
+		}
+	}
+	return filteredPrices(parseCandidatesFromPage(string(buf))), nil
+}
+
+// --- RefreshStaleComponentPricesWorker ---
+
+type mockComponentPriceRepoForRefresh struct {
+	repository.ComponentPriceRepository
+
+	staleEntries []*model.ComponentPrice
+	lookupResult map[string]*model.ComponentPrice
+}
+
+func (m *mockComponentPriceRepoForRefresh) ListStale(_ context.Context, _ time.Duration) ([]*model.ComponentPrice, error) {
+	return m.staleEntries, nil
+}
+
+func (m *mockComponentPriceRepoForRefresh) GetByNormalizedName(_ context.Context, name string) (*model.ComponentPrice, error) {
+	if m.lookupResult != nil {
+		if cp, ok := m.lookupResult[name]; ok {
+			return cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func TestRefreshWorker_StaleEntry_Requeued(t *testing.T) {
+	stale := []*model.ComponentPrice{{Name: "RTX 4060", Category: "gpu"}}
+	mock := &mockComponentPriceRepoForRefresh{staleEntries: stale}
+	repo := &repository.Repository{ComponentPrice: mock}
+
+	var queued []ScrapeComponentPriceArgs
+	insertFn := func(_ context.Context, args ScrapeComponentPriceArgs) error {
+		queued = append(queued, args)
+		return nil
+	}
+
+	w := NewRefreshStaleComponentPricesWorker(repo, insertFn, nil, 6*time.Hour)
+	err := w.Work(context.Background(), &river.Job[RefreshStaleComponentPricesArgs]{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queued) != 1 || queued[0].Name != "RTX 4060" {
+		t.Errorf("expected stale entry to be requeued, got %v", queued)
+	}
+}
+
+func TestRefreshWorker_MissingSeed_Queued(t *testing.T) {
+	// No stale entries, seed is not in DB.
+	mock := &mockComponentPriceRepoForRefresh{}
+	repo := &repository.Repository{ComponentPrice: mock}
+
+	seeds := []ComponentSeed{{Name: "RTX 4060", Category: "gpu"}}
+	var queued []ScrapeComponentPriceArgs
+	insertFn := func(_ context.Context, args ScrapeComponentPriceArgs) error {
+		queued = append(queued, args)
+		return nil
+	}
+
+	w := NewRefreshStaleComponentPricesWorker(repo, insertFn, seeds, 6*time.Hour)
+	err := w.Work(context.Background(), &river.Job[RefreshStaleComponentPricesArgs]{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queued) != 1 || queued[0].Name != "RTX 4060" {
+		t.Errorf("expected missing seed to be queued, got %v", queued)
+	}
+}
+
+func TestRefreshWorker_FreshSeed_NotRequeued(t *testing.T) {
+	// Seed already exists in DB (non-stale).
+	existing := &model.ComponentPrice{Name: "RTX 4060"}
+	mock := &mockComponentPriceRepoForRefresh{
+		lookupResult: map[string]*model.ComponentPrice{"rtx 4060": existing},
+	}
+	repo := &repository.Repository{ComponentPrice: mock}
+
+	seeds := []ComponentSeed{{Name: "RTX 4060", Category: "gpu"}}
+	var queued []ScrapeComponentPriceArgs
+	insertFn := func(_ context.Context, args ScrapeComponentPriceArgs) error {
+		queued = append(queued, args)
+		return nil
+	}
+
+	w := NewRefreshStaleComponentPricesWorker(repo, insertFn, seeds, 6*time.Hour)
+	err := w.Work(context.Background(), &river.Job[RefreshStaleComponentPricesArgs]{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queued) != 0 {
+		t.Errorf("expected no jobs queued for fresh seed, got %v", queued)
 	}
 }

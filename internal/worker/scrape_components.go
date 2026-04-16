@@ -93,7 +93,10 @@ func (w *ScrapeComponentPriceWorker) Work(ctx context.Context, job *river.Job[Sc
 }
 
 func (w *ScrapeComponentPriceWorker) scrapePricePage(ctx context.Context, name string, page int) ([]float64, error) {
-	searchURL := buildSearchURL(name)
+	searchURL, err := buildSearchURL(name)
+	if err != nil {
+		return nil, fmt.Errorf("build search URL for %q: %w", name, err)
+	}
 	if page > 1 {
 		searchURL += fmt.Sprintf("?page=%d", page)
 	}
@@ -110,7 +113,7 @@ func (w *ScrapeComponentPriceWorker) scrapePricePage(ctx context.Context, name s
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
@@ -305,7 +308,7 @@ func filteredPrices(candidates []pricedListing) []float64 {
 	}
 	lower := q1 - 1.5*iqr
 	upper := q3 + 1.5*iqr
-	result := kept[:0]
+	result := make([]float64, 0, len(kept))
 	for _, p := range kept {
 		if p >= lower && p <= upper {
 			result = append(result, p)
@@ -399,7 +402,9 @@ func normalizeComponentName(name string) string {
 
 // buildSearchURL constructs the OLX search URL for a component name.
 // e.g. "RTX 4060" → "https://www.olx.bg/ads/q-rtx-4060/"
-func buildSearchURL(name string) string {
+// Returns an error if the name produces an empty slug after stripping non-ASCII
+// characters — which would hit the generic OLX homepage and return unrelated results.
+func buildSearchURL(name string) (string, error) {
 	slug := strings.ToLower(strings.TrimSpace(name))
 	slug = strings.ReplaceAll(slug, " ", "-")
 	var b strings.Builder
@@ -408,5 +413,8 @@ func buildSearchURL(name string) string {
 			b.WriteRune(r)
 		}
 	}
-	return "https://www.olx.bg/ads/q-" + b.String() + "/"
+	if b.Len() == 0 {
+		return "", fmt.Errorf("component name %q produces empty search slug", name)
+	}
+	return "https://www.olx.bg/ads/q-" + b.String() + "/", nil
 }

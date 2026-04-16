@@ -125,7 +125,7 @@ func (w *EnrichListingWorker) fetchListingPage(ctx context.Context, listingURL s
 		return "", fmt.Errorf("status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
 		return "", err
 	}
@@ -237,11 +237,27 @@ func scoreListing(result *llm.ExtractionResult, marketScore *float64) model.Enri
 	return scores
 }
 
-// computeMarketScore looks up component prices and returns ask/sum_parts.
+// eurToBGN is the legally fixed EUR→BGN exchange rate (Currency Board, since 1999).
+const eurToBGN = 1.95583
+
+// computeMarketScore looks up component prices and returns ask/sum_parts (both in BGN).
 // Returns nil when no component prices are available.
 // As a side effect, queues ScrapeComponentPriceArgs jobs for unknown components.
 func (w *EnrichListingWorker) computeMarketScore(ctx context.Context, result *llm.ExtractionResult) *float64 {
 	if len(result.Components) == 0 || result.PriceAmount <= 0 {
+		return nil
+	}
+
+	// Normalize ask price to BGN. Component prices are always in BGN.
+	// EUR→BGN is a fixed legal rate. Non-BGN/EUR currencies return nil
+	// (no reliable rate to apply).
+	askBGN := result.PriceAmount
+	switch strings.ToUpper(result.PriceCurrency) {
+	case "BGN", "":
+		// already BGN
+	case "EUR":
+		askBGN = result.PriceAmount * eurToBGN
+	default:
 		return nil
 	}
 
@@ -267,10 +283,14 @@ func (w *EnrichListingWorker) computeMarketScore(ctx context.Context, result *ll
 		matched++
 	}
 
-	if matched == 0 || sumParts <= 0 {
+	// Require all components to be priced. A partial sum produces a
+	// definitively wrong score (ask vs. one component instead of the full
+	// system), which is worse than returning nil and falling back to
+	// condition-based scoring.
+	if matched == 0 || matched < len(result.Components) || sumParts <= 0 {
 		return nil
 	}
 
-	score := result.PriceAmount / sumParts
+	score := askBGN / sumParts
 	return &score
 }

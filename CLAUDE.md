@@ -17,3 +17,9 @@ Key routing rules:
 - Architecture review → invoke plan-eng-review
 - Save progress, checkpoint, resume → invoke checkpoint
 - Code quality, health check → invoke health
+
+## Health Stack
+
+- build: go build ./...
+- vet: go vet ./...
+- test: go test -count=1 ./...
